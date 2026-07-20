@@ -13,7 +13,7 @@
 
 ## Docker 部署
 
-需要 Docker Engine 24+ 与 Docker Compose v2。
+推荐使用 Docker Engine 20.10+。有 Docker Compose v2 时可直接使用项目中的 Compose 配置：
 
 ```bash
 cp .env.example .env
@@ -27,6 +27,23 @@ docker compose up -d --build
 ```
 
 打开 `http://服务器地址:8080`，使用 `.env` 中的管理员账号登录。管理员密码只在首次创建数据库时使用。
+
+没有 Docker Compose 时，可以使用项目根目录的部署脚本。脚本会检查 `.env`、构建镜像、保留数据卷并替换容器；监听地址固定为 `.env` 中端口对应的 `127.0.0.1`，适合由同机 Nginx 反向代理：
+
+```bash
+chmod +x deploy.sh
+./deploy.sh
+```
+
+脚本默认通过 `https://goproxy.cn,direct` 下载 Go 依赖。需要更换代理时可执行 `GOPROXY=https://代理地址 ./deploy.sh`。
+
+当前服务器使用 `UP_UPDATE_HTTP_PORT=10025` 时，容器会监听 `127.0.0.1:10025`。以后更新可执行：
+
+```bash
+cd /usr/local/up-update
+git pull
+./deploy.sh
+```
 
 PowerShell 可用以下命令生成密钥：
 
