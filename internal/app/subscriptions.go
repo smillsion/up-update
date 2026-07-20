@@ -199,6 +199,38 @@ func (a *App) listDeliveriesHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, items)
 }
 
+func (a *App) deletePendingDeliveryHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "通知编号不正确")
+		return
+	}
+	u := userFrom(r)
+	a.deliveryMu.Lock()
+	defer a.deliveryMu.Unlock()
+	result, err := a.db.Exec(`DELETE FROM deliveries WHERE id=? AND user_id=? AND status='pending'`, id, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法取消等待发送的通知")
+		return
+	}
+	count, _ := result.RowsAffected()
+	if count > 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var status string
+	err = a.db.QueryRow(`SELECT status FROM deliveries WHERE id=? AND user_id=?`, id, u.ID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "通知不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取通知状态")
+		return
+	}
+	writeError(w, http.StatusConflict, "delivery_not_pending", "通知已不在等待发送状态")
+}
+
 func cleanError(value string) string {
 	value = strings.TrimSpace(value)
 	if len(value) > 300 {

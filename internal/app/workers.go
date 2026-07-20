@@ -135,6 +135,8 @@ type queuedDelivery struct {
 }
 
 func (a *App) deliverOne(ctx context.Context) {
+	a.deliveryMu.Lock()
+	defer a.deliveryMu.Unlock()
 	var item queuedDelivery
 	err := a.db.QueryRowContext(ctx, `SELECT d.id,d.user_id,d.attempts,v.bvid,v.title,v.url,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND d.next_attempt_at<=? AND u.enabled=1 ORDER BY d.next_attempt_at LIMIT 1`, time.Now().Unix()).Scan(&item.ID, &item.UserID, &item.Attempts, &item.BVID, &item.VideoTitle, &item.VideoURL, &item.CreatorName, &item.Avatar)
 	if err != nil {

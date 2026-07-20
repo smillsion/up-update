@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -13,13 +14,14 @@ import (
 )
 
 type App struct {
-	cfg    Config
-	db     *sql.DB
-	vault  *Vault
-	logger *slog.Logger
-	bili   *BilibiliClient
-	bark   *BarkClient
-	login  *loginLimiter
+	cfg        Config
+	db         *sql.DB
+	vault      *Vault
+	logger     *slog.Logger
+	bili       *BilibiliClient
+	bark       *BarkClient
+	login      *loginLimiter
+	deliveryMu sync.Mutex
 }
 
 func New(cfg Config, logger *slog.Logger) (*App, error) {
@@ -65,6 +67,7 @@ func (a *App) Routes() http.Handler {
 				r.With(a.requireCSRF).Patch("/subscriptions/{id}", a.updateSubscriptionHandler)
 				r.With(a.requireCSRF).Delete("/subscriptions/{id}", a.deleteSubscriptionHandler)
 				r.Get("/deliveries", a.listDeliveriesHandler)
+				r.With(a.requireCSRF).Delete("/deliveries/{id}", a.deletePendingDeliveryHandler)
 				r.Route("/admin", func(r chi.Router) {
 					r.Use(a.requireAdmin)
 					r.Get("/users", a.listUsersHandler)
