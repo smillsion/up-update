@@ -93,3 +93,9 @@ INSERT OR IGNORE INTO app_settings(key, value) VALUES ('poll_interval_seconds', 
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries(status, next_attempt_at);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_creator ON subscriptions(creator_mid, enabled);
+
+-- Older versions treated Bark's {"code":200,"message":"success"} response as a
+-- failure and retried notifications that had already been delivered.
+UPDATE deliveries
+SET status = 'sent', last_error = '', sent_at = COALESCE(sent_at, created_at)
+WHERE status IN ('pending', 'failed') AND last_error = 'success';

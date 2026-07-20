@@ -52,7 +52,7 @@ func (b *BarkClient) Send(ctx context.Context, server string, message BarkMessag
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}
-	if json.Unmarshal(body, &result) == nil && result.Code != 0 {
+	if json.Unmarshal(body, &result) == nil && result.Code != 0 && result.Code != http.StatusOK {
 		if result.Message == "" {
 			result.Message = "推送被拒绝"
 		}

@@ -48,19 +48,13 @@ func TestRecordVideosUsesSubscriptionBaseline(t *testing.T) {
 	}
 }
 
-func TestBarkSpaceURL(t *testing.T) {
-	if got := barkSpaceURL("546195"); got != "bilibili://space/546195" {
-		t.Fatalf("barkSpaceURL=%q", got)
-	}
-}
-
-func TestDeliveryUsesBilibiliSpaceDeepLink(t *testing.T) {
+func TestDeliveryUsesVideoURL(t *testing.T) {
 	var received BarkMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
 			t.Error(err)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"code": 0})
+		_ = json.NewEncoder(w).Encode(map[string]any{"code": 200, "message": "success"})
 	}))
 	defer server.Close()
 
@@ -76,7 +70,48 @@ func TestDeliveryUsesBilibiliSpaceDeepLink(t *testing.T) {
 	_, _ = a.db.Exec(`INSERT INTO deliveries(user_id,bvid,next_attempt_at,created_at) VALUES(?,'BV1',?,?)`, userID, time.Now().Unix(), time.Now().Unix())
 
 	a.deliverOne(context.Background())
-	if received.URL != "bilibili://space/546195" {
+	if received.URL != "https://example/video" {
 		t.Fatalf("Bark URL=%q", received.URL)
+	}
+	var status string
+	var attempts int
+	if err := a.db.QueryRow(`SELECT status,attempts FROM deliveries WHERE bvid='BV1'`).Scan(&status, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if status != "sent" || attempts != 1 {
+		t.Fatalf("delivery=(%q,%d), want (sent,1)", status, attempts)
+	}
+}
+
+func TestStartupRepairsBarkSuccessDeliveries(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{DataDir: dir, DatabasePath: filepath.Join(dir, "test.db"), EncryptionKey: []byte("01234567890123456789012345678901"), AdminUsername: "admin", AdminPassword: "admin-password", DefaultBarkServer: "https://api.day.app"}
+	a, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var userID int64
+	if err := a.db.QueryRow(`SELECT id FROM users WHERE username='admin'`).Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('1','UP',100)`)
+	_, _ = a.db.Exec(`INSERT INTO videos(bvid,creator_mid,title,url,published_at,detected_at) VALUES('BV1','1','Video','https://example/video',100,100)`)
+	_, _ = a.db.Exec(`INSERT INTO deliveries(user_id,bvid,status,attempts,next_attempt_at,last_error,created_at) VALUES(?,'BV1','pending',5,9999999999,'success',100)`, userID)
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err = New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	var status, lastError string
+	var sentAt int64
+	if err := a.db.QueryRow(`SELECT status,last_error,sent_at FROM deliveries WHERE bvid='BV1'`).Scan(&status, &lastError, &sentAt); err != nil {
+		t.Fatal(err)
+	}
+	if status != "sent" || lastError != "" || sentAt != 100 {
+		t.Fatalf("delivery=(%q,%q,%d), want (sent,empty,100)", status, lastError, sentAt)
 	}
 }

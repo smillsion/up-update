@@ -129,20 +129,20 @@ func (a *App) runDeliveryWorker(ctx context.Context) {
 }
 
 type queuedDelivery struct {
-	ID, UserID                                                  int64
-	Attempts                                                    int
-	BVID, VideoTitle, VideoURL, CreatorMID, CreatorName, Avatar string
+	ID, UserID                                      int64
+	Attempts                                        int
+	BVID, VideoTitle, VideoURL, CreatorName, Avatar string
 }
 
 func (a *App) deliverOne(ctx context.Context) {
 	var item queuedDelivery
-	err := a.db.QueryRowContext(ctx, `SELECT d.id,d.user_id,d.attempts,v.bvid,v.title,v.url,c.mid,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND d.next_attempt_at<=? AND u.enabled=1 ORDER BY d.next_attempt_at LIMIT 1`, time.Now().Unix()).Scan(&item.ID, &item.UserID, &item.Attempts, &item.BVID, &item.VideoTitle, &item.VideoURL, &item.CreatorMID, &item.CreatorName, &item.Avatar)
+	err := a.db.QueryRowContext(ctx, `SELECT d.id,d.user_id,d.attempts,v.bvid,v.title,v.url,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND d.next_attempt_at<=? AND u.enabled=1 ORDER BY d.next_attempt_at LIMIT 1`, time.Now().Unix()).Scan(&item.ID, &item.UserID, &item.Attempts, &item.BVID, &item.VideoTitle, &item.VideoURL, &item.CreatorName, &item.Avatar)
 	if err != nil {
 		return
 	}
 	server, key, level, sound, err := a.loadBark(item.UserID)
 	if err == nil {
-		err = a.bark.Send(ctx, server, BarkMessage{DeviceKey: key, Title: item.CreatorName + " 发布了新视频", Body: item.VideoTitle, Group: "up-update", URL: barkSpaceURL(item.CreatorMID), Icon: item.Avatar, Level: level, Sound: sound})
+		err = a.bark.Send(ctx, server, BarkMessage{DeviceKey: key, Title: item.CreatorName + " 发布了新视频", Body: item.VideoTitle, Group: "up-update", URL: item.VideoURL, Icon: item.Avatar, Level: level, Sound: sound})
 	}
 	if err == nil {
 		_, _ = a.db.Exec(`UPDATE deliveries SET status='sent',attempts=attempts+1,last_error='',sent_at=? WHERE id=?`, time.Now().Unix(), item.ID)
@@ -150,8 +150,6 @@ func (a *App) deliverOne(ctx context.Context) {
 	}
 	a.recordDeliveryFailure(item, err)
 }
-
-func barkSpaceURL(mid string) string { return "bilibili://space/" + mid }
 
 func (a *App) recordDeliveryFailure(item queuedDelivery, sendErr error) {
 	attempts := item.Attempts + 1
