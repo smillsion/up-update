@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -48,6 +49,11 @@ type Video struct {
 	Title       string `json:"title"`
 	URL         string `json:"url"`
 	PublishedAt int64  `json:"publishedAt"`
+}
+type VideoFetchResult struct {
+	MID    string
+	Videos []Video
+	Err    error
 }
 
 type BilibiliClient struct {
@@ -206,6 +212,54 @@ func (c *BilibiliClient) GetLatestVideos(ctx context.Context, mid, cookie string
 	if err != nil {
 		return nil, err
 	}
+	return c.getLatestVideos(ctx, mid, cookie, nav)
+}
+
+func (c *BilibiliClient) GetLatestVideosBatch(ctx context.Context, mids []string, cookie string, concurrency int) []VideoFetchResult {
+	results := make([]VideoFetchResult, len(mids))
+	for index, mid := range mids {
+		results[index].MID = mid
+	}
+	if len(mids) == 0 {
+		return results
+	}
+	nav, err := c.nav(ctx, cookie)
+	if err != nil {
+		for index := range results {
+			results[index].Err = err
+		}
+		return results
+	}
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	if concurrency > len(mids) {
+		concurrency = len(mids)
+	}
+	jobs := make(chan int, len(mids))
+	for index := range mids {
+		jobs <- index
+	}
+	close(jobs)
+	var workers sync.WaitGroup
+	workers.Add(concurrency)
+	for range concurrency {
+		go func() {
+			defer workers.Done()
+			for index := range jobs {
+				if err := ctx.Err(); err != nil {
+					results[index].Err = err
+					continue
+				}
+				results[index].Videos, results[index].Err = c.getLatestVideos(ctx, mids[index], cookie, nav)
+			}
+		}()
+	}
+	workers.Wait()
+	return results
+}
+
+func (c *BilibiliClient) getLatestVideos(ctx context.Context, mid, cookie string, nav navData) ([]Video, error) {
 	if nav.WBIImage.ImageURL == "" || nav.WBIImage.SubURL == "" {
 		return nil, errors.New("无法获取 B 站请求签名")
 	}

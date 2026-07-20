@@ -30,9 +30,11 @@ test('mobile settings flow fits the viewport', async ({ page }) => {
   await login(page)
   await expect(page.locator('.sidebar')).toBeHidden()
   await expect(page.locator('.mobile-nav')).toBeVisible()
-  await page.getByRole('link', { name: '设置' }).click()
+  await page.getByRole('link', { name: '设置', exact: true }).click()
   await expect(page.getByRole('heading', { name: '设置' })).toBeVisible()
   await expect(page.getByRole('button', { name: '退出' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '设置' })).toHaveCSS('user-select', 'none')
+  await expect(page.getByLabel('Cookie')).toHaveCSS('user-select', 'text')
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: 'test-results/mobile-settings.png' })
 })
@@ -96,7 +98,7 @@ test('following import dialog works on desktop and mobile', async ({ page }) => 
   }))
   await page.route('**/api/subscriptions/import-followings', async route => {
     importRequest = route.request().postData() || ''
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ imported: 1, skipped: 0 }) })
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ imported: 1, skipped: 0, initialized: 1, pending: 0 }) })
   })
   await page.route('**/api/subscriptions/followings?page=*', route => route.fulfill({
     contentType: 'application/json',
@@ -106,8 +108,10 @@ test('following import dialog works on desktop and mobile', async ({ page }) => 
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.goto('/subscriptions')
+  await expect(page.getByRole('heading', { name: 'UP 主订阅' })).toHaveCSS('user-select', 'none')
   await page.getByRole('button', { name: '从关注导入' }).click()
   await expect(page.getByRole('heading', { name: '从关注列表导入' })).toBeVisible()
+  await expect(page.locator('.following-row input').first()).toHaveCSS('user-select', 'text')
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: 'test-results/desktop-following-import.png', fullPage: true })
 

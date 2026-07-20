@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { BellRing, ListVideo, History, Settings, Users, LogOut } from 'lucide-vue-next'
+import { ListVideo, History, Settings, Users, LogOut } from 'lucide-vue-next'
 import { auth } from './api'
 import { session } from './state'
 
@@ -20,7 +20,7 @@ async function logout(){try{await auth.logout()}finally{session.user=null;router
   <RouterView v-if="publicPage" />
   <div v-else class="app-shell">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark"><BellRing :size="20"/></span><span>up-update</span></div>
+      <div class="brand"><span class="brand-mark"><img src="/app-icon.png" alt=""/></span><span>up-update</span></div>
       <nav class="desktop-nav" aria-label="主导航">
         <RouterLink v-for="item in items" :key="item.to" :to="item.to"><component :is="item.icon" :size="19"/><span>{{item.label}}</span></RouterLink>
       </nav>

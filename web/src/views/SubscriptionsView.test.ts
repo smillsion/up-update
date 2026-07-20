@@ -16,7 +16,7 @@ const settings=(configured:boolean,status:string)=>({
 function mountView(){return mount(SubscriptionsView,{global:{stubs:{RouterLink:{template:'<a><slot/></a>'}}}})}
 
 describe('SubscriptionsView',()=>{
-  afterEach(()=>mocks.request.mockReset())
+  afterEach(()=>{mocks.request.mockReset();vi.useRealTimers()})
 
   it('disables subscription actions when the Bilibili cookie is unavailable',async()=>{
     mocks.request.mockImplementation((path:string)=>Promise.resolve(path==='/subscriptions'?[]:settings(false,'missing')))
@@ -33,7 +33,7 @@ describe('SubscriptionsView',()=>{
       if(path==='/subscriptions')return Promise.resolve([])
       if(path==='/settings')return Promise.resolve(settings(true,'valid'))
       if(path==='/subscriptions/followings?page=1')return Promise.resolve({items:[{mid:'2',name:'New UP',avatar:'',subscribed:false}],page:1,pageSize:50,total:1,totalPages:1})
-      if(path==='/subscriptions/import-followings'&&options?.method==='POST')return Promise.resolve({imported:1,skipped:0})
+      if(path==='/subscriptions/import-followings'&&options?.method==='POST')return Promise.resolve({imported:1,skipped:0,initialized:1,pending:0})
       return Promise.reject(new Error(`unexpected request: ${path}`))
     })
     const wrapper=mountView()
@@ -46,5 +46,28 @@ describe('SubscriptionsView',()=>{
 
     expect(mocks.request).toHaveBeenCalledWith('/subscriptions/import-followings',expect.objectContaining({method:'POST',body:JSON.stringify({page:1,mids:['2']})}))
     expect(wrapper.text()).toContain('已导入 1 个订阅')
+  })
+
+  it('shows initialization state and refreshes it in the background',async()=>{
+    vi.useFakeTimers()
+    let subscriptionRequests=0
+    const base={id:2,enabled:true,mid:'2',name:'New UP',avatar:'',latestBvid:'',latestTitle:'',subscribedAt:1,lastPolledAt:null,error:''}
+    mocks.request.mockImplementation((path:string)=>{
+      if(path==='/settings')return Promise.resolve(settings(true,'valid'))
+      if(path==='/subscriptions'){
+        subscriptionRequests++
+        return Promise.resolve([{...base,...(subscriptionRequests>1?{latestBvid:'BV2',latestTitle:'Latest video',lastPolledAt:2}:{})}])
+      }
+      return Promise.reject(new Error(`unexpected request: ${path}`))
+    })
+    const wrapper=mountView()
+    await flushPromises()
+    expect(wrapper.text()).toContain('正在获取最新投稿')
+
+    await vi.advanceTimersByTimeAsync(5000)
+    await flushPromises()
+    expect(subscriptionRequests).toBe(2)
+    expect(wrapper.text()).toContain('Latest video')
+    wrapper.unmount()
   })
 })

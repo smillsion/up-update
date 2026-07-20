@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sync/atomic"
 	"testing"
 )
 
@@ -37,6 +38,7 @@ func TestSignWBIIsDeterministic(t *testing.T) {
 }
 
 func TestBilibiliClient(t *testing.T) {
+	var navRequests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Cookie") != "SESSDATA=test" {
 			t.Error("cookie missing")
@@ -44,12 +46,17 @@ func TestBilibiliClient(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/x/web-interface/nav":
+			navRequests.Add(1)
 			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
 		case "/x/web-interface/card":
 			fmt.Fprint(w, `{"code":0,"data":{"card":{"mid":"546195","name":"测试UP","face":"https://image/avatar.jpg"}}}`)
 		case "/x/space/wbi/arc/search":
 			if r.URL.Query().Get("w_rid") == "" {
 				t.Error("signature missing")
+			}
+			if r.URL.Query().Get("mid") == "999" {
+				fmt.Fprint(w, `{"code":-509,"message":"limited"}`)
+				return
 			}
 			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[{"bvid":"BV2","title":"新视频","created":200},{"bvid":"BV1","title":"旧视频","created":100}]}}}`)
 		case "/x/relation/followings":
@@ -79,5 +86,13 @@ func TestBilibiliClient(t *testing.T) {
 	followings, err := client.GetFollowings(ctx, "SESSDATA=test", 2, 50)
 	if err != nil || followings.Total != 51 || len(followings.Items) != 1 || followings.Items[0].MID != "456" || followings.Items[0].Avatar != "https://image/following.jpg" {
 		t.Fatalf("followings: %#v %v", followings, err)
+	}
+	beforeBatch := navRequests.Load()
+	batch := client.GetLatestVideosBatch(ctx, []string{"546195", "999"}, "SESSDATA=test", 2)
+	if navRequests.Load()-beforeBatch != 1 {
+		t.Fatalf("batch nav requests=%d, want 1", navRequests.Load()-beforeBatch)
+	}
+	if len(batch) != 2 || batch[0].Err != nil || len(batch[0].Videos) != 2 || batch[1].Err == nil {
+		t.Fatalf("batch results: %#v", batch)
 	}
 }

@@ -1,6 +1,7 @@
 :root{font-family:Inter,"SF Pro Text","PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:#202428;background:#f7f8fa;font-synthesis:none;letter-spacing:0;--bg:#f7f8fa;--surface:#fff;--text:#202428;--muted:#697077;--border:#e1e5e8;--primary:#167d5a;--primary-hover:#106747;--primary-soft:#e8f4ef;--coral:#d95b48;--coral-soft:#fbece8;--danger:#bc3d3d;--danger-soft:#fcecec;--shadow:0 18px 45px rgba(32,36,40,.13)}
 *{box-sizing:border-box}
-html,body,#app{min-height:100%;margin:0}
+html,body,#app{min-height:100%;margin:0;-webkit-user-select:none;user-select:none}
+input,textarea,[contenteditable="true"]{-webkit-user-select:text;user-select:text}
 body{background:var(--bg);color:var(--text)}
 button,input,textarea,select{font:inherit;letter-spacing:0}
 button,a{touch-action:manipulation}
@@ -13,7 +14,7 @@ h2{font-size:1rem;line-height:1.35}
 .app-shell{min-height:100vh}
 .sidebar{position:fixed;inset:0 auto 0 0;width:232px;padding:26px 18px 20px;background:#20272a;color:#f7f8fa;display:flex;flex-direction:column;z-index:20}
 .brand{height:40px;display:flex;align-items:center;gap:11px;padding:0 8px;font-size:1.08rem;font-weight:720}
-.brand-mark{width:34px;height:34px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:var(--coral);color:#fff;flex:none}
+.brand-mark{width:34px;height:34px;display:inline-flex;align-items:center;justify-content:center;flex:none}.brand-mark img{width:100%;height:100%;object-fit:contain}
 .brand-mark.large{width:48px;height:48px}
 .desktop-nav{display:grid;gap:5px;margin-top:38px}
 .desktop-nav a{height:44px;padding:0 12px;border-radius:7px;display:flex;align-items:center;gap:12px;color:#bfc8c9;font-size:.92rem}

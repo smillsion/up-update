@@ -115,3 +115,32 @@ func TestStartupRepairsBarkSuccessDeliveries(t *testing.T) {
 		t.Fatalf("delivery=(%q,%q,%d), want (sent,empty,100)", status, lastError, sentAt)
 	}
 }
+
+func TestStartupRequeuesUninitializedFollowingImports(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{DataDir: dir, DatabasePath: filepath.Join(dir, "test.db"), EncryptionKey: []byte("01234567890123456789012345678901"), AdminUsername: "admin", AdminPassword: "admin-password", DefaultBarkServer: "https://api.day.app"}
+	a, err := New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('pending','Pending',100),('checked','Checked',100),('failed','Failed',100)`)
+	_, _ = a.db.Exec(`INSERT INTO poll_states(creator_mid,last_polled_at,next_poll_at,last_error) VALUES('pending',NULL,9999999999,''),('checked',100,9999999999,''),('failed',NULL,9999999999,'limited')`)
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	a, err = New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.Close()
+	for mid, want := range map[string]int64{"pending": 0, "checked": 9999999999, "failed": 9999999999} {
+		var nextPoll int64
+		if err := a.db.QueryRow(`SELECT next_poll_at FROM poll_states WHERE creator_mid=?`, mid).Scan(&nextPoll); err != nil {
+			t.Fatal(err)
+		}
+		if nextPoll != want {
+			t.Fatalf("%s next_poll_at=%d, want %d", mid, nextPoll, want)
+		}
+	}
+}

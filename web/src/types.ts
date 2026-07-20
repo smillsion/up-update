@@ -7,4 +7,4 @@ export interface Subscription {id:number;enabled:boolean;mid:string;name:string;
 export interface Delivery {id:number;status:'pending'|'sent'|'failed';attempts:number;error:string;createdAt:number;sentAt:number|null;bvid:string;videoTitle:string;videoUrl:string;creatorName:string;creatorAvatar:string}
 export interface Following {mid:string;name:string;avatar:string;subscribed:boolean}
 export interface PageResult<T> {items:T[];page:number;pageSize:number;total:number;totalPages:number}
-export interface FollowingImportResult {imported:number;skipped:number}
+export interface FollowingImportResult {imported:number;skipped:number;initialized:number;pending:number}

@@ -100,3 +100,14 @@ CREATE INDEX IF NOT EXISTS idx_subscriptions_creator ON subscriptions(creator_mi
 UPDATE deliveries
 SET status = 'sent', last_error = '', sent_at = COALESCE(sent_at, created_at)
 WHERE status IN ('pending', 'failed') AND last_error = 'success';
+
+-- Following imports created by older versions waited before their first poll,
+-- leaving the UI to report that no public videos existed in the meantime.
+UPDATE poll_states
+SET next_poll_at = 0
+WHERE last_polled_at IS NULL
+  AND last_error = ''
+  AND EXISTS (
+    SELECT 1 FROM creators c
+    WHERE c.mid = poll_states.creator_mid AND c.latest_bvid = ''
+  );

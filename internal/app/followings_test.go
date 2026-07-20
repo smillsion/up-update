@@ -24,6 +24,7 @@ func configureTestBiliCookie(t *testing.T, a *App, userID int64, cookie string) 
 }
 
 func TestFollowingsCanBeListedAndImported(t *testing.T) {
+	oldPublished := time.Now().Add(-time.Hour).Unix()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Cookie") != "SESSDATA=test" {
 			t.Error("cookie missing")
@@ -31,9 +32,15 @@ func TestFollowingsCanBeListedAndImported(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/x/web-interface/nav":
-			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester"}}`)
+			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
 		case "/x/relation/followings":
-			fmt.Fprint(w, `{"code":0,"data":{"list":[{"mid":1,"uname":"Existing","face":"https://image/1.jpg"},{"mid":2,"uname":"New UP","face":"https://image/2.jpg"}],"total":2}}`)
+			fmt.Fprint(w, `{"code":0,"data":{"list":[{"mid":1,"uname":"Existing","face":"https://image/1.jpg"},{"mid":2,"uname":"New UP","face":"https://image/2.jpg"},{"mid":3,"uname":"Pending UP","face":"https://image/3.jpg"}],"total":3}}`)
+		case "/x/space/wbi/arc/search":
+			if r.URL.Query().Get("mid") == "3" {
+				fmt.Fprint(w, `{"code":-509,"message":"limited"}`)
+				return
+			}
+			fmt.Fprintf(w, `{"code":0,"data":{"list":{"vlist":[{"bvid":"BV2latest","title":"Latest video","created":%d}]}}}`, oldPublished)
 		default:
 			http.NotFound(w, r)
 		}
@@ -59,11 +66,11 @@ func TestFollowingsCanBeListedAndImported(t *testing.T) {
 	if err := json.Unmarshal(listResponse.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Items) != 2 || !page.Items[0].Subscribed || page.Items[1].Subscribed {
+	if len(page.Items) != 3 || !page.Items[0].Subscribed || page.Items[1].Subscribed || page.Items[2].Subscribed {
 		t.Fatalf("unexpected followings: %#v", page.Items)
 	}
 
-	body := bytes.NewBufferString(`{"page":1,"mids":["1","2"]}`)
+	body := bytes.NewBufferString(`{"page":1,"mids":["1","2","3"]}`)
 	importRequest := httptest.NewRequest(http.MethodPost, "/api/subscriptions/import-followings", body)
 	importRequest.AddCookie(cookie)
 	importRequest.Header.Set("X-CSRF-Token", user.CSRFToken)
@@ -76,14 +83,25 @@ func TestFollowingsCanBeListedAndImported(t *testing.T) {
 	if err := json.Unmarshal(importResponse.Body.Bytes(), &result); err != nil {
 		t.Fatal(err)
 	}
-	if result["imported"] != 1 || result["skipped"] != 1 {
+	if result["imported"] != 2 || result["skipped"] != 1 || result["initialized"] != 1 || result["pending"] != 1 {
 		t.Fatalf("unexpected import result: %#v", result)
 	}
 	var subscriptions, pollStates int
 	_ = a.db.QueryRow(`SELECT COUNT(*) FROM subscriptions WHERE user_id=?`, user.ID).Scan(&subscriptions)
-	_ = a.db.QueryRow(`SELECT COUNT(*) FROM poll_states WHERE creator_mid='2'`).Scan(&pollStates)
-	if subscriptions != 2 || pollStates != 1 {
+	_ = a.db.QueryRow(`SELECT COUNT(*) FROM poll_states WHERE creator_mid IN ('2','3')`).Scan(&pollStates)
+	if subscriptions != 3 || pollStates != 2 {
 		t.Fatalf("subscriptions=%d pollStates=%d", subscriptions, pollStates)
+	}
+	var latestBVID, baseline string
+	_ = a.db.QueryRow(`SELECT latest_bvid FROM creators WHERE mid='2'`).Scan(&latestBVID)
+	_ = a.db.QueryRow(`SELECT baseline_bvid FROM subscriptions WHERE user_id=? AND creator_mid='2'`, user.ID).Scan(&baseline)
+	if latestBVID != "BV2latest" || baseline != "BV2latest" {
+		t.Fatalf("latest=%q baseline=%q", latestBVID, baseline)
+	}
+	var pendingNextPoll int64
+	_ = a.db.QueryRow(`SELECT next_poll_at FROM poll_states WHERE creator_mid='3'`).Scan(&pendingNextPoll)
+	if pendingNextPoll > time.Now().Unix() {
+		t.Fatalf("pending next poll=%d, want immediate", pendingNextPoll)
 	}
 	staleRequest := httptest.NewRequest(http.MethodPost, "/api/subscriptions/import-followings", bytes.NewBufferString(`{"page":1,"mids":["999"]}`))
 	staleRequest.AddCookie(cookie)

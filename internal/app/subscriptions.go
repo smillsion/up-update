@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"net/http"
@@ -29,6 +30,8 @@ const (
 	deliveryPageSize   = 20
 	followingPageSize  = 50
 	maxFollowingImport = 20
+	followingFetchers  = 3
+	followingFetchTime = 20 * time.Second
 )
 
 func requestPage(r *http.Request) (int, error) {
@@ -375,6 +378,51 @@ func (a *App) importFollowingsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	existing := map[string]bool{}
+	rows, err := a.db.Query(`SELECT creator_mid FROM subscriptions WHERE user_id=?`, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取现有订阅")
+		return
+	}
+	for rows.Next() {
+		var mid string
+		if err := rows.Scan(&mid); err != nil {
+			rows.Close()
+			writeError(w, http.StatusInternalServerError, "database", "无法读取现有订阅")
+			return
+		}
+		existing[mid] = true
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		writeError(w, http.StatusInternalServerError, "database", "无法读取现有订阅")
+		return
+	}
+	rows.Close()
+	toImport := make([]Following, 0, len(selected))
+	mids := make([]string, 0, len(selected))
+	for _, mid := range selected {
+		if existing[mid] {
+			continue
+		}
+		toImport = append(toImport, available[mid])
+		mids = append(mids, mid)
+	}
+	if len(toImport) == 0 {
+		writeJSON(w, http.StatusOK, map[string]int{"imported": 0, "skipped": len(selected), "initialized": 0, "pending": 0})
+		return
+	}
+	fetchContext, cancel := context.WithTimeout(r.Context(), followingFetchTime)
+	fetched := a.bili.GetLatestVideosBatch(fetchContext, mids, cookie, followingFetchers)
+	cancel()
+	fetchByMID := make(map[string]VideoFetchResult, len(fetched))
+	for _, result := range fetched {
+		fetchByMID[result.MID] = result
+		if result.Err != nil {
+			a.recordBiliAuthError(u.ID, result.Err)
+		}
+	}
+	interval := a.pollInterval()
 	tx, err := a.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database", "无法导入关注列表")
@@ -382,21 +430,36 @@ func (a *App) importFollowingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	now := time.Now().Unix()
-	imported := 0
-	for _, mid := range selected {
-		item := available[mid]
-		if _, err := tx.Exec(`INSERT INTO creators(mid,name,avatar,updated_at) VALUES(?,?,?,?) ON CONFLICT(mid) DO UPDATE SET name=excluded.name,avatar=excluded.avatar,updated_at=excluded.updated_at`, item.MID, item.Name, item.Avatar, now); err != nil {
+	importedMIDs := map[string]bool{}
+	for _, item := range toImport {
+		result := fetchByMID[item.MID]
+		latest := Video{}
+		if result.Err == nil && len(result.Videos) > 0 {
+			latest = result.Videos[len(result.Videos)-1]
+		}
+		if result.Err == nil {
+			_, err = tx.Exec(`INSERT INTO creators(mid,name,avatar,latest_bvid,latest_title,updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(mid) DO UPDATE SET name=excluded.name,avatar=excluded.avatar,latest_bvid=excluded.latest_bvid,latest_title=excluded.latest_title,updated_at=excluded.updated_at`, item.MID, item.Name, item.Avatar, latest.BVID, latest.Title, now)
+		} else {
+			_, err = tx.Exec(`INSERT INTO creators(mid,name,avatar,updated_at) VALUES(?,?,?,?) ON CONFLICT(mid) DO UPDATE SET name=excluded.name,avatar=excluded.avatar,updated_at=excluded.updated_at`, item.MID, item.Name, item.Avatar, now)
+		}
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database", "无法保存关注账号")
 			return
 		}
-		result, err := tx.Exec(`INSERT OR IGNORE INTO subscriptions(user_id,creator_mid,baseline_bvid,subscribed_at) VALUES(?,?,?,?)`, u.ID, item.MID, "", now)
+		insert, err := tx.Exec(`INSERT OR IGNORE INTO subscriptions(user_id,creator_mid,baseline_bvid,subscribed_at) VALUES(?,?,?,?)`, u.ID, item.MID, latest.BVID, now)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "database", "无法创建订阅")
 			return
 		}
-		count, _ := result.RowsAffected()
-		imported += int(count)
-		if _, err := tx.Exec(`INSERT OR IGNORE INTO poll_states(creator_mid,next_poll_at) VALUES(?,?)`, item.MID, now+60); err != nil {
+		count, _ := insert.RowsAffected()
+		if count > 0 {
+			importedMIDs[item.MID] = true
+		}
+		nextPoll := now
+		if result.Err == nil {
+			nextPoll = now + int64(interval)
+		}
+		if _, err := tx.Exec(`INSERT INTO poll_states(creator_mid,next_poll_at) VALUES(?,?) ON CONFLICT(creator_mid) DO UPDATE SET next_poll_at=MIN(poll_states.next_poll_at,excluded.next_poll_at)`, item.MID, nextPoll); err != nil {
 			writeError(w, http.StatusInternalServerError, "database", "无法创建轮询状态")
 			return
 		}
@@ -405,7 +468,28 @@ func (a *App) importFollowingsHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "database", "无法导入关注列表")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"imported": imported, "skipped": len(selected) - imported})
+	initialized := 0
+	pending := 0
+	for _, result := range fetched {
+		if !importedMIDs[result.MID] {
+			continue
+		}
+		if result.Err != nil {
+			pending++
+			continue
+		}
+		if err := a.recordVideos(r.Context(), result.MID, result.Videos); err != nil {
+			a.logger.Error("record imported videos failed", "mid", result.MID, "error", err)
+			_, _ = a.db.Exec(`UPDATE poll_states SET next_poll_at=? WHERE creator_mid=?`, time.Now().Unix(), result.MID)
+			pending++
+			continue
+		}
+		checkedAt := time.Now().Unix()
+		_, _ = a.db.Exec(`UPDATE poll_states SET last_polled_at=?,next_poll_at=?,failure_count=0,last_error='' WHERE creator_mid=?`, checkedAt, checkedAt+int64(interval), result.MID)
+		initialized++
+	}
+	imported := len(importedMIDs)
+	writeJSON(w, http.StatusOK, map[string]int{"imported": imported, "skipped": len(selected) - imported, "initialized": initialized, "pending": pending})
 }
 
 func (a *App) deletePendingDeliveryHandler(w http.ResponseWriter, r *http.Request) {
