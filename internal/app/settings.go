@@ -2,10 +2,16 @@ package app
 
 import (
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+)
+
+var (
+	errBiliCookieMissing = errors.New("请先在设置中保存并验证 B 站 Cookie")
+	errBiliCookieInvalid = errors.New("B 站 Cookie 当前不可用，请先前往设置更新")
 )
 
 type userSettings struct {
@@ -153,10 +159,10 @@ func (a *App) loadBiliCookie(userID int64) (string, error) {
 	var encrypted, status string
 	err := a.db.QueryRow(`SELECT bili_cookie_enc,bili_status FROM integrations WHERE user_id=?`, userID).Scan(&encrypted, &status)
 	if err != nil || encrypted == "" {
-		return "", sql.ErrNoRows
+		return "", errBiliCookieMissing
 	}
 	if status != "valid" {
-		return "", &validationError{"B 站 Cookie 当前不可用，请先更新"}
+		return "", errBiliCookieInvalid
 	}
 	return a.vault.Decrypt(encrypted)
 }

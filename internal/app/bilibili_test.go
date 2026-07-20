@@ -44,7 +44,7 @@ func TestBilibiliClient(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/x/web-interface/nav":
-			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
 		case "/x/web-interface/card":
 			fmt.Fprint(w, `{"code":0,"data":{"card":{"mid":"546195","name":"测试UP","face":"https://image/avatar.jpg"}}}`)
 		case "/x/space/wbi/arc/search":
@@ -52,6 +52,11 @@ func TestBilibiliClient(t *testing.T) {
 				t.Error("signature missing")
 			}
 			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[{"bvid":"BV2","title":"新视频","created":200},{"bvid":"BV1","title":"旧视频","created":100}]}}}`)
+		case "/x/relation/followings":
+			if r.URL.Query().Get("vmid") != "123" || r.URL.Query().Get("pn") != "2" || r.URL.Query().Get("ps") != "50" {
+				t.Errorf("unexpected following query: %s", r.URL.RawQuery)
+			}
+			fmt.Fprint(w, `{"code":0,"data":{"list":[{"mid":456,"uname":"关注的UP","face":"http://image/following.jpg"}],"total":51}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -70,5 +75,9 @@ func TestBilibiliClient(t *testing.T) {
 	videos, err := client.GetLatestVideos(ctx, "546195", "SESSDATA=test")
 	if err != nil || len(videos) != 2 || videos[0].BVID != "BV1" {
 		t.Fatalf("videos: %#v %v", videos, err)
+	}
+	followings, err := client.GetFollowings(ctx, "SESSDATA=test", 2, 50)
+	if err != nil || followings.Total != 51 || len(followings.Items) != 1 || followings.Items[0].MID != "456" || followings.Items[0].Avatar != "https://image/following.jpg" {
+		t.Fatalf("followings: %#v %v", followings, err)
 	}
 }

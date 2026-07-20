@@ -64,6 +64,8 @@ func (a *App) Routes() http.Handler {
 				r.With(a.requireCSRF).Post("/settings/bark/test", a.testBarkHandler)
 				r.Get("/subscriptions", a.listSubscriptionsHandler)
 				r.With(a.requireCSRF).Post("/subscriptions", a.createSubscriptionHandler)
+				r.Get("/subscriptions/followings", a.listFollowingsHandler)
+				r.With(a.requireCSRF).Post("/subscriptions/import-followings", a.importFollowingsHandler)
 				r.With(a.requireCSRF).Patch("/subscriptions/{id}", a.updateSubscriptionHandler)
 				r.With(a.requireCSRF).Delete("/subscriptions/{id}", a.deleteSubscriptionHandler)
 				r.Get("/deliveries", a.listDeliveriesHandler)

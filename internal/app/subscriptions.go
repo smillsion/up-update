@@ -25,6 +25,51 @@ type subscriptionView struct {
 	Error        string `json:"error"`
 }
 
+const (
+	deliveryPageSize   = 20
+	followingPageSize  = 50
+	maxFollowingImport = 20
+)
+
+func requestPage(r *http.Request) (int, error) {
+	value := strings.TrimSpace(r.URL.Query().Get("page"))
+	if value == "" {
+		return 1, nil
+	}
+	page, err := strconv.Atoi(value)
+	if err != nil || page < 1 {
+		return 0, errors.New("页码必须是正整数")
+	}
+	return page, nil
+}
+
+func pageCount(total, pageSize int) int {
+	if total == 0 {
+		return 0
+	}
+	return (total + pageSize - 1) / pageSize
+}
+
+func writeBiliCookieError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errBiliCookieMissing):
+		writeError(w, http.StatusBadRequest, "bilibili_missing", err.Error())
+	case errors.Is(err, errBiliCookieInvalid):
+		writeError(w, http.StatusBadRequest, "bilibili_invalid", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, "bilibili_cookie", "无法读取 B 站 Cookie")
+	}
+}
+
+func (a *App) recordBiliAuthError(userID int64, err error) {
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || !providerErr.Auth {
+		return
+	}
+	now := time.Now().Unix()
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_status='invalid',bili_error=?,bili_last_validated=?,updated_at=? WHERE user_id=?`, cleanError(err.Error()), now, now, userID)
+}
+
 func (a *App) listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	rows, err := a.db.Query(`SELECT s.id,s.enabled,c.mid,c.name,c.avatar,c.latest_bvid,c.latest_title,s.subscribed_at,p.last_polled_at,COALESCE(p.last_error,'') FROM subscriptions s JOIN creators c ON c.mid=s.creator_mid LEFT JOIN poll_states p ON p.creator_mid=c.mid WHERE s.user_id=? ORDER BY s.subscribed_at DESC`, u.ID)
@@ -63,16 +108,18 @@ func (a *App) createSubscriptionHandler(w http.ResponseWriter, r *http.Request) 
 	u := userFrom(r)
 	cookie, err := a.loadBiliCookie(u.ID)
 	if err != nil {
-		writeError(w, 400, "bilibili_missing", err.Error())
+		writeBiliCookieError(w, err)
 		return
 	}
 	creator, err := a.bili.GetCreator(r.Context(), mid, cookie)
 	if err != nil {
+		a.recordBiliAuthError(u.ID, err)
 		writeError(w, 502, "bilibili_failed", err.Error())
 		return
 	}
 	videos, err := a.bili.GetLatestVideos(r.Context(), mid, cookie)
 	if err != nil {
+		a.recordBiliAuthError(u.ID, err)
 		writeError(w, 502, "bilibili_failed", err.Error())
 		return
 	}
@@ -177,9 +224,27 @@ type deliveryView struct {
 	CreatorAvatar string `json:"creatorAvatar"`
 }
 
+type deliveryPageView struct {
+	Items      []deliveryView `json:"items"`
+	Page       int            `json:"page"`
+	PageSize   int            `json:"pageSize"`
+	Total      int            `json:"total"`
+	TotalPages int            `json:"totalPages"`
+}
+
 func (a *App) listDeliveriesHandler(w http.ResponseWriter, r *http.Request) {
+	page, err := requestPage(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_page", err.Error())
+		return
+	}
 	u := userFrom(r)
-	rows, err := a.db.Query(`SELECT d.id,d.status,d.attempts,d.last_error,d.created_at,d.sent_at,v.bvid,v.title,v.url,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid WHERE d.user_id=? ORDER BY d.created_at DESC LIMIT 100`, u.ID)
+	var total int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM deliveries WHERE user_id=?`, u.ID).Scan(&total); err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取通知总数")
+		return
+	}
+	rows, err := a.db.Query(`SELECT d.id,d.status,d.attempts,d.last_error,d.created_at,d.sent_at,v.bvid,v.title,v.url,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid WHERE d.user_id=? ORDER BY d.created_at DESC,d.id DESC LIMIT ? OFFSET ?`, u.ID, deliveryPageSize, (page-1)*deliveryPageSize)
 	if err != nil {
 		writeError(w, 500, "database", "无法读取通知记录")
 		return
@@ -196,7 +261,151 @@ func (a *App) listDeliveriesHandler(w http.ResponseWriter, r *http.Request) {
 			items = append(items, item)
 		}
 	}
-	writeJSON(w, 200, items)
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取通知记录")
+		return
+	}
+	writeJSON(w, http.StatusOK, deliveryPageView{Items: items, Page: page, PageSize: deliveryPageSize, Total: total, TotalPages: pageCount(total, deliveryPageSize)})
+}
+
+type followingView struct {
+	MID        string `json:"mid"`
+	Name       string `json:"name"`
+	Avatar     string `json:"avatar"`
+	Subscribed bool   `json:"subscribed"`
+}
+
+type followingPageView struct {
+	Items      []followingView `json:"items"`
+	Page       int             `json:"page"`
+	PageSize   int             `json:"pageSize"`
+	Total      int             `json:"total"`
+	TotalPages int             `json:"totalPages"`
+}
+
+func (a *App) listFollowingsHandler(w http.ResponseWriter, r *http.Request) {
+	page, err := requestPage(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_page", err.Error())
+		return
+	}
+	u := userFrom(r)
+	cookie, err := a.loadBiliCookie(u.ID)
+	if err != nil {
+		writeBiliCookieError(w, err)
+		return
+	}
+	followings, err := a.bili.GetFollowings(r.Context(), cookie, page, followingPageSize)
+	if err != nil {
+		a.recordBiliAuthError(u.ID, err)
+		writeError(w, http.StatusBadGateway, "bilibili_failed", err.Error())
+		return
+	}
+	subscribed := map[string]bool{}
+	rows, err := a.db.Query(`SELECT creator_mid FROM subscriptions WHERE user_id=?`, u.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取现有订阅")
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mid string
+		if err := rows.Scan(&mid); err != nil {
+			writeError(w, http.StatusInternalServerError, "database", "无法读取现有订阅")
+			return
+		}
+		subscribed[mid] = true
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取现有订阅")
+		return
+	}
+	items := make([]followingView, 0, len(followings.Items))
+	for _, item := range followings.Items {
+		items = append(items, followingView{MID: item.MID, Name: item.Name, Avatar: item.Avatar, Subscribed: subscribed[item.MID]})
+	}
+	writeJSON(w, http.StatusOK, followingPageView{Items: items, Page: page, PageSize: followingPageSize, Total: followings.Total, TotalPages: pageCount(followings.Total, followingPageSize)})
+}
+
+func (a *App) importFollowingsHandler(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Page int      `json:"page"`
+		MIDs []string `json:"mids"`
+	}
+	if decodeJSON(r, &input) != nil || input.Page < 1 {
+		writeError(w, http.StatusBadRequest, "invalid_request", "关注列表导入参数不正确")
+		return
+	}
+	selected := make([]string, 0, len(input.MIDs))
+	seen := map[string]bool{}
+	for _, value := range input.MIDs {
+		mid, err := parseMID(value)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_mid", err.Error())
+			return
+		}
+		if !seen[mid] {
+			seen[mid] = true
+			selected = append(selected, mid)
+		}
+	}
+	if len(selected) == 0 || len(selected) > maxFollowingImport {
+		writeError(w, http.StatusBadRequest, "invalid_selection", "每次请选择 1 到 20 个关注账号")
+		return
+	}
+	u := userFrom(r)
+	cookie, err := a.loadBiliCookie(u.ID)
+	if err != nil {
+		writeBiliCookieError(w, err)
+		return
+	}
+	followings, err := a.bili.GetFollowings(r.Context(), cookie, input.Page, followingPageSize)
+	if err != nil {
+		a.recordBiliAuthError(u.ID, err)
+		writeError(w, http.StatusBadGateway, "bilibili_failed", err.Error())
+		return
+	}
+	available := make(map[string]Following, len(followings.Items))
+	for _, item := range followings.Items {
+		available[item.MID] = item
+	}
+	for _, mid := range selected {
+		if _, ok := available[mid]; !ok {
+			writeError(w, http.StatusConflict, "following_page_changed", "关注列表已发生变化，请刷新后重新选择")
+			return
+		}
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法导入关注列表")
+		return
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	imported := 0
+	for _, mid := range selected {
+		item := available[mid]
+		if _, err := tx.Exec(`INSERT INTO creators(mid,name,avatar,updated_at) VALUES(?,?,?,?) ON CONFLICT(mid) DO UPDATE SET name=excluded.name,avatar=excluded.avatar,updated_at=excluded.updated_at`, item.MID, item.Name, item.Avatar, now); err != nil {
+			writeError(w, http.StatusInternalServerError, "database", "无法保存关注账号")
+			return
+		}
+		result, err := tx.Exec(`INSERT OR IGNORE INTO subscriptions(user_id,creator_mid,baseline_bvid,subscribed_at) VALUES(?,?,?,?)`, u.ID, item.MID, "", now)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "database", "无法创建订阅")
+			return
+		}
+		count, _ := result.RowsAffected()
+		imported += int(count)
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO poll_states(creator_mid,next_poll_at) VALUES(?,?)`, item.MID, now+60); err != nil {
+			writeError(w, http.StatusInternalServerError, "database", "无法创建轮询状态")
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法导入关注列表")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"imported": imported, "skipped": len(selected) - imported})
 }
 
 func (a *App) deletePendingDeliveryHandler(w http.ResponseWriter, r *http.Request) {

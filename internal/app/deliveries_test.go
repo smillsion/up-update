@@ -1,12 +1,49 @@
 package app
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 	"time"
 )
+
+func TestListDeliveriesIsPaginatedAndIsolated(t *testing.T) {
+	a := testApp(t)
+	handler := a.Routes()
+	cookie, user := loginRequest(t, handler, "admin", "admin-password")
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('1','UP',100)`)
+	for index := 1; index <= 25; index++ {
+		bvid := fmt.Sprintf("BV%02d", index)
+		_, _ = a.db.Exec(`INSERT INTO videos(bvid,creator_mid,title,url,published_at,detected_at) VALUES(?,'1',?,?,?,?)`, bvid, "Video "+bvid, "https://example/"+bvid, index, index)
+		_, _ = a.db.Exec(`INSERT INTO deliveries(user_id,bvid,status,next_attempt_at,created_at) VALUES(?,?,'sent',0,?)`, user.ID, bvid, index)
+	}
+	hash, _ := hashPassword("member-password")
+	member, _ := a.db.Exec(`INSERT INTO users(username,display_name,password_hash,created_at) VALUES('member','Member',?,100)`, hash)
+	memberID, _ := member.LastInsertId()
+	_, _ = a.db.Exec(`INSERT INTO videos(bvid,creator_mid,title,url,published_at,detected_at) VALUES('OTHER','1','Other','https://example/other',100,100)`)
+	_, _ = a.db.Exec(`INSERT INTO deliveries(user_id,bvid,status,next_attempt_at,created_at) VALUES(?,'OTHER','sent',0,100)`, memberID)
+
+	request := httptest.NewRequest(http.MethodGet, "/api/deliveries?page=2", nil)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", response.Code, response.Body.String())
+	}
+	var page deliveryPageView
+	if err := json.Unmarshal(response.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 25 || page.TotalPages != 2 || page.PageSize != 20 || len(page.Items) != 5 {
+		t.Fatalf("unexpected page: %#v", page)
+	}
+	if page.Items[0].BVID != "BV05" || page.Items[4].BVID != "BV01" {
+		t.Fatalf("unexpected order: %#v", page.Items)
+	}
+}
 
 func TestDeletePendingDelivery(t *testing.T) {
 	a := testApp(t)

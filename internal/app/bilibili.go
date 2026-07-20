@@ -32,6 +32,17 @@ type Creator struct {
 	Name   string `json:"name"`
 	Avatar string `json:"avatar"`
 }
+type Following struct {
+	MID    string `json:"mid"`
+	Name   string `json:"name"`
+	Avatar string `json:"avatar"`
+}
+type FollowingPage struct {
+	Items    []Following
+	Page     int
+	PageSize int
+	Total    int
+}
 type Video struct {
 	BVID        string `json:"bvid"`
 	Title       string `json:"title"`
@@ -103,6 +114,7 @@ func (c *BilibiliClient) request(ctx context.Context, endpoint string, query url
 
 type navData struct {
 	IsLogin  bool   `json:"isLogin"`
+	MID      int64  `json:"mid"`
 	Uname    string `json:"uname"`
 	WBIImage struct {
 		ImageURL string `json:"img_url"`
@@ -145,6 +157,48 @@ func (c *BilibiliClient) GetCreator(ctx context.Context, mid, cookie string) (Cr
 		return Creator{}, errors.New("没有找到这个 UP 主")
 	}
 	return Creator{MID: data.Card.MID, Name: data.Card.Name, Avatar: strings.Replace(data.Card.Face, "http://", "https://", 1)}, nil
+}
+
+func (c *BilibiliClient) GetFollowings(ctx context.Context, cookie string, page, pageSize int) (FollowingPage, error) {
+	if page < 1 || pageSize < 1 || pageSize > 50 {
+		return FollowingPage{}, errors.New("关注列表分页参数不正确")
+	}
+	nav, err := c.nav(ctx, cookie)
+	if err != nil {
+		return FollowingPage{}, err
+	}
+	if !nav.IsLogin || nav.MID <= 0 {
+		return FollowingPage{}, &ProviderError{Code: -101, Message: "Cookie 未登录或已失效", Auth: true}
+	}
+	var data struct {
+		List []struct {
+			MID    int64  `json:"mid"`
+			Name   string `json:"uname"`
+			Avatar string `json:"face"`
+		} `json:"list"`
+		Total int `json:"total"`
+	}
+	query := url.Values{
+		"vmid":  {strconv.FormatInt(nav.MID, 10)},
+		"pn":    {strconv.Itoa(page)},
+		"ps":    {strconv.Itoa(pageSize)},
+		"order": {"desc"},
+	}
+	if err := c.request(ctx, "/x/relation/followings", query, cookie, &data); err != nil {
+		return FollowingPage{}, err
+	}
+	items := make([]Following, 0, len(data.List))
+	for _, item := range data.List {
+		if item.MID <= 0 {
+			continue
+		}
+		items = append(items, Following{
+			MID:    strconv.FormatInt(item.MID, 10),
+			Name:   item.Name,
+			Avatar: strings.Replace(item.Avatar, "http://", "https://", 1),
+		})
+	}
+	return FollowingPage{Items: items, Page: page, PageSize: pageSize, Total: data.Total}, nil
 }
 
 func (c *BilibiliClient) GetLatestVideos(ctx context.Context, mid, cookie string) ([]Video, error) {

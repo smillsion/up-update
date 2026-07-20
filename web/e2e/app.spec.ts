@@ -40,6 +40,7 @@ test('mobile settings flow fits the viewport', async ({ page }) => {
 test('pending delivery can be cancelled without layout overflow', async ({ page }) => {
   let deleteRequest = ''
   let deleteCSRF = ''
+  let deleted = false
   await page.route('**/api/auth/me', route => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify({ id: 1, username: 'admin', displayName: 'Admin', role: 'admin', forcePasswordChange: false, csrfToken: 'csrf-test' }),
@@ -47,11 +48,12 @@ test('pending delivery can be cancelled without layout overflow', async ({ page 
   await page.route('**/api/deliveries/**', route => {
     deleteRequest = `${route.request().method()} ${new URL(route.request().url()).pathname}`
     deleteCSRF = route.request().headers()['x-csrf-token'] || ''
+    deleted = true
     return route.fulfill({ status: 204 })
   })
-  await page.route('**/api/deliveries', route => route.fulfill({
+  await page.route('**/api/deliveries?page=*', route => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify([{
+    body: JSON.stringify({items:deleted?[]:[{
       id: 7,
       status: 'pending',
       attempts: 5,
@@ -63,7 +65,7 @@ test('pending delivery can be cancelled without layout overflow', async ({ page 
       videoUrl: 'https://www.bilibili.com/video/BV1test',
       creatorName: '牢文luwen',
       creatorAvatar: '',
-    }]),
+    }],page:1,pageSize:20,total:deleted?0:41,totalPages:deleted?0:3}),
   }))
 
   await page.setViewportSize({ width: 1440, height: 900 })
@@ -80,4 +82,40 @@ test('pending delivery can be cancelled without layout overflow', async ({ page 
   await expect(page.getByRole('heading', { name: '还没有通知' })).toBeVisible()
   expect(deleteRequest).toBe('DELETE /api/deliveries/7')
   expect(deleteCSRF).toBe('csrf-test')
+})
+
+test('following import dialog works on desktop and mobile', async ({ page }) => {
+  let importRequest = ''
+  await page.route('**/api/auth/me', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 1, username: 'admin', displayName: 'Admin', role: 'admin', forcePasswordChange: false, csrfToken: 'csrf-test' }),
+  }))
+  await page.route('**/api/settings', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ bilibili: { configured: true, status: 'valid', name: 'tester', lastValidated: 1, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '' } }),
+  }))
+  await page.route('**/api/subscriptions/import-followings', async route => {
+    importRequest = route.request().postData() || ''
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ imported: 1, skipped: 0 }) })
+  })
+  await page.route('**/api/subscriptions/followings?page=*', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ items: [{ mid: '2', name: 'New UP', avatar: '', subscribed: false }, { mid: '3', name: 'Subscribed UP', avatar: '', subscribed: true }], page: 1, pageSize: 50, total: 2, totalPages: 1 }),
+  }))
+  await page.route('**/api/subscriptions', route => route.fulfill({ contentType: 'application/json', body: '[]' }))
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/subscriptions')
+  await page.getByRole('button', { name: '从关注导入' }).click()
+  await expect(page.getByRole('heading', { name: '从关注列表导入' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/desktop-following-import.png', fullPage: true })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/mobile-following-import.png', fullPage: true })
+  await page.locator('.following-row input').check()
+  await page.getByRole('button', { name: '导入选中 (1)' }).click()
+  await expect(page.getByText('已导入 1 个订阅')).toBeVisible()
+  expect(JSON.parse(importRequest)).toEqual({ page: 1, mids: ['2'] })
 })

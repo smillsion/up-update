@@ -6,6 +6,7 @@
 
 ### Added
 
+- 订阅页 Cookie 前置提示、B 站关注列表批量导入与投递记录分页
 - 多用户 UP 主新视频监控与 Bark 推送
 - Cookie 加密、会话认证、管理员账号管理
 - 移动端管理页面、Docker Compose 与发布工作流

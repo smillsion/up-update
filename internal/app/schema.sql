@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS app_settings (
 INSERT OR IGNORE INTO app_settings(key, value) VALUES ('poll_interval_seconds', '300');
 CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
 CREATE INDEX IF NOT EXISTS idx_deliveries_due ON deliveries(status, next_attempt_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_user_history ON deliveries(user_id, created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_creator ON subscriptions(creator_mid, enabled);
 
 -- Older versions treated Bark's {"code":200,"message":"success"} response as a
