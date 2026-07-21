@@ -219,6 +219,9 @@ func (a *App) updateSystemHandler(w http.ResponseWriter, r *http.Request) {
 		_, err = tx.Exec(`INSERT INTO app_settings(key,value) VALUES('poll_interval_seconds',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, strconv.Itoa(schedule.Free.IntervalMinutes*60))
 	}
 	if err == nil {
+		_, err = tx.Exec(`UPDATE deliveries SET deferred_until=0 WHERE status='pending' AND deferred_until>0`)
+	}
+	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {

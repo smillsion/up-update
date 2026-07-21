@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
@@ -52,6 +54,25 @@ func TestCrossMidnightWindowAndNextTransition(t *testing.T) {
 	}
 }
 
+func TestDeliveryDeferredUntilUsesActiveSleepAndQuietWindows(t *testing.T) {
+	schedule := defaultPollSchedule(300)
+	schedule.Sleep.Start = "23:00"
+	schedule.Sleep.End = "08:00"
+	settings := barkSettings{QuietEnabled: true, QuietStart: "07:00", QuietEnd: "09:00"}
+
+	until, deferred := deliveryDeferredUntil(schedule, settings, shanghaiTime(7, 30))
+	if !deferred || until.In(shanghaiLocation).Format("2006-01-02 15:04") != "2026-07-21 09:00" {
+		t.Fatalf("overlap deferred until %v, want 2026-07-21 09:00", until)
+	}
+	until, deferred = deliveryDeferredUntil(schedule, settings, shanghaiTime(23, 30))
+	if !deferred || until.In(shanghaiLocation).Format("2006-01-02 15:04") != "2026-07-22 08:00" {
+		t.Fatalf("overnight deferred until %v, want 2026-07-22 08:00", until)
+	}
+	if _, deferred = deliveryDeferredUntil(schedule, settings, shanghaiTime(9, 0)); deferred {
+		t.Fatal("expected delivery to resume at the end boundary")
+	}
+}
+
 func TestPollScheduleValidationRejectsOverlappingWork(t *testing.T) {
 	schedule := defaultPollSchedule(300)
 	schedule.Work.Windows = []clockWindow{{Start: "09:00", End: "12:00"}, {Start: "11:30", End: "13:00"}}
@@ -77,6 +98,25 @@ func TestRequeueNormalPollsPreservesFailures(t *testing.T) {
 	}
 	if failed != 9999999999 {
 		t.Fatalf("failed next_poll_at=%d, want unchanged", failed)
+	}
+}
+
+func TestUpdateScheduleRequeuesDeferredDeliveries(t *testing.T) {
+	a := testApp(t)
+	userID := adminUserIDForTest(t, a)
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('schedule-up','UP',100)`)
+	_, _ = a.db.Exec(`INSERT INTO videos(bvid,creator_mid,title,url,published_at,detected_at) VALUES('SCHEDULE-BV','schedule-up','Video','https://example/video',100,100)`)
+	_, _ = a.db.Exec(`INSERT INTO deliveries(user_id,bvid,next_attempt_at,deferred_until,created_at) VALUES(?,'SCHEDULE-BV',100,9999999999,100)`, userID)
+	body, _ := json.Marshal(map[string]any{"pollSchedule": defaultPollSchedule(300)})
+	request := settingsRequest(http.MethodPut, "/api/admin/system", string(body), userID)
+	response := httptest.NewRecorder()
+	a.updateSystemHandler(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var deferredUntil int64
+	if err := a.db.QueryRow(`SELECT deferred_until FROM deliveries WHERE bvid='SCHEDULE-BV'`).Scan(&deferredUntil); err != nil || deferredUntil != 0 {
+		t.Fatalf("deferred_until=%d, err=%v; want queue re-evaluation", deferredUntil, err)
 	}
 }
 

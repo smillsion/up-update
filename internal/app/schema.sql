@@ -79,6 +79,7 @@ CREATE TABLE IF NOT EXISTS deliveries (
   status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed')),
   attempts INTEGER NOT NULL DEFAULT 0,
   next_attempt_at INTEGER NOT NULL,
+  deferred_until INTEGER NOT NULL DEFAULT 0,
   last_error TEXT NOT NULL DEFAULT '',
   sent_at INTEGER,
   created_at INTEGER NOT NULL,

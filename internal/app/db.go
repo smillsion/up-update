@@ -40,7 +40,7 @@ func openDB(cfg Config) (*sql.DB, error) {
 }
 
 func migrateSettings(db *sql.DB) error {
-	columns := []struct {
+	integrationColumns := []struct {
 		name       string
 		definition string
 	}{
@@ -48,13 +48,30 @@ func migrateSettings(db *sql.DB) error {
 		{"bark_quiet_start", "TEXT NOT NULL DEFAULT '12:00'"},
 		{"bark_quiet_end", "TEXT NOT NULL DEFAULT '14:00'"},
 	}
-	for _, column := range columns {
+	for _, column := range integrationColumns {
 		exists, err := tableHasColumn(db, "integrations", column.name)
 		if err != nil {
 			return err
 		}
 		if !exists {
 			if _, err := db.Exec("ALTER TABLE integrations ADD COLUMN " + column.name + " " + column.definition); err != nil {
+				return err
+			}
+		}
+	}
+	deliveryColumns := []struct {
+		name       string
+		definition string
+	}{
+		{"deferred_until", "INTEGER NOT NULL DEFAULT 0"},
+	}
+	for _, column := range deliveryColumns {
+		exists, err := tableHasColumn(db, "deliveries", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.Exec("ALTER TABLE deliveries ADD COLUMN " + column.name + " " + column.definition); err != nil {
 				return err
 			}
 		}

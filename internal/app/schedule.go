@@ -120,6 +120,35 @@ func containsClock(window clockWindow, minute int) bool {
 	return minute >= start || minute < end
 }
 
+func clockWindowEnd(window clockWindow, now time.Time) (time.Time, bool) {
+	start, startErr := parseClock(window.Start)
+	end, endErr := parseClock(window.End)
+	local := now.In(shanghaiLocation)
+	minute := local.Hour()*60 + local.Minute()
+	if startErr != nil || endErr != nil || start == end || !containsClock(window, minute) {
+		return time.Time{}, false
+	}
+	endDayOffset := 0
+	if start > end && minute >= start {
+		endDayOffset = 1
+	}
+	startOfDay := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, shanghaiLocation)
+	return startOfDay.AddDate(0, 0, endDayOffset).Add(time.Duration(end) * time.Minute), true
+}
+
+func deliveryDeferredUntil(schedule pollSchedule, settings barkSettings, now time.Time) (time.Time, bool) {
+	var until time.Time
+	if end, active := clockWindowEnd(schedule.Sleep.clockWindow, now); active {
+		until = end
+	}
+	if settings.QuietEnabled {
+		if end, active := clockWindowEnd(clockWindow{Start: settings.QuietStart, End: settings.QuietEnd}, now); active && end.After(until) {
+			until = end
+		}
+	}
+	return until, !until.IsZero()
+}
+
 func periodAt(schedule pollSchedule, now time.Time) (string, int) {
 	local := now.In(shanghaiLocation)
 	minute := local.Hour()*60 + local.Minute()

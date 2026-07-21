@@ -137,10 +137,10 @@ func validateBarkQuietInput(start, end string) error {
 	startMinute, startErr := parseClock(start)
 	endMinute, endErr := parseClock(end)
 	if startErr != nil || endErr != nil {
-		return &validationError{"午休静默时间格式不正确"}
+		return &validationError{"午休延迟时间格式不正确"}
 	}
 	if startMinute == endMinute {
-		return &validationError{"午休静默开始和结束时间不能相同"}
+		return &validationError{"午休延迟开始和结束时间不能相同"}
 	}
 	return nil
 }
@@ -181,9 +181,23 @@ func (a *App) saveBarkHandler(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "encryption", "无法加密 Device Key")
 			return
 		}
-		_, err = a.db.Exec(`UPDATE integrations SET bark_server=?,bark_key_enc=?,bark_level=?,bark_sound=?,bark_quiet_enabled=?,bark_quiet_start=?,bark_quiet_end=?,updated_at=? WHERE user_id=?`, input.Server, encrypted, input.Level, input.Sound, input.QuietEnabled, input.QuietStart, input.QuietEnd, time.Now().Unix(), u.ID)
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "database", "无法保存 Bark 设置")
+		return
+	}
+	defer tx.Rollback()
+	if input.DeviceKey != "" {
+		_, err = tx.Exec(`UPDATE integrations SET bark_server=?,bark_key_enc=?,bark_level=?,bark_sound=?,bark_quiet_enabled=?,bark_quiet_start=?,bark_quiet_end=?,updated_at=? WHERE user_id=?`, input.Server, encrypted, input.Level, input.Sound, input.QuietEnabled, input.QuietStart, input.QuietEnd, time.Now().Unix(), u.ID)
 	} else {
-		_, err = a.db.Exec(`UPDATE integrations SET bark_server=?,bark_level=?,bark_sound=?,bark_quiet_enabled=?,bark_quiet_start=?,bark_quiet_end=?,updated_at=? WHERE user_id=?`, input.Server, input.Level, input.Sound, input.QuietEnabled, input.QuietStart, input.QuietEnd, time.Now().Unix(), u.ID)
+		_, err = tx.Exec(`UPDATE integrations SET bark_server=?,bark_level=?,bark_sound=?,bark_quiet_enabled=?,bark_quiet_start=?,bark_quiet_end=?,updated_at=? WHERE user_id=?`, input.Server, input.Level, input.Sound, input.QuietEnabled, input.QuietStart, input.QuietEnd, time.Now().Unix(), u.ID)
+	}
+	if err == nil {
+		_, err = tx.Exec(`UPDATE deliveries SET deferred_until=0 WHERE user_id=? AND status='pending' AND deferred_until>0`, u.ID)
+	}
+	if err == nil {
+		err = tx.Commit()
 	}
 	if err != nil {
 		writeError(w, 500, "database", "无法保存 Bark 设置")
@@ -250,16 +264,6 @@ func (a *App) loadBark(userID int64) (settings barkSettings, err error) {
 	}
 	settings.Key, err = a.vault.Decrypt(encrypted)
 	return
-}
-
-func effectiveBarkLevel(settings barkSettings, now time.Time) string {
-	if settings.QuietEnabled {
-		local := now.In(shanghaiLocation)
-		if containsClock(clockWindow{Start: settings.QuietStart, End: settings.QuietEnd}, local.Hour()*60+local.Minute()) {
-			return "passive"
-		}
-	}
-	return settings.Level
 }
 
 func (a *App) loadBiliCookie(userID int64) (string, error) {

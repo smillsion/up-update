@@ -136,19 +136,27 @@ type queuedDelivery struct {
 }
 
 func (a *App) deliverOne(ctx context.Context) {
+	a.deliverOneAt(ctx, time.Now())
+}
+
+func (a *App) deliverOneAt(ctx context.Context, now time.Time) {
 	a.deliveryMu.Lock()
 	defer a.deliveryMu.Unlock()
 	var item queuedDelivery
-	err := a.db.QueryRowContext(ctx, `SELECT d.id,d.user_id,d.attempts,v.bvid,v.title,v.url,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND d.next_attempt_at<=? AND u.enabled=1 ORDER BY d.next_attempt_at LIMIT 1`, time.Now().Unix()).Scan(&item.ID, &item.UserID, &item.Attempts, &item.BVID, &item.VideoTitle, &item.VideoURL, &item.CreatorName, &item.Avatar)
+	err := a.db.QueryRowContext(ctx, `SELECT d.id,d.user_id,d.attempts,v.bvid,v.title,v.url,c.name,c.avatar FROM deliveries d JOIN videos v ON v.bvid=d.bvid JOIN creators c ON c.mid=v.creator_mid JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND d.next_attempt_at<=? AND d.deferred_until<=? AND u.enabled=1 ORDER BY MAX(d.next_attempt_at,d.deferred_until),d.id LIMIT 1`, now.Unix(), now.Unix()).Scan(&item.ID, &item.UserID, &item.Attempts, &item.BVID, &item.VideoTitle, &item.VideoURL, &item.CreatorName, &item.Avatar)
 	if err != nil {
 		return
 	}
 	settings, err := a.loadBark(item.UserID)
-	if err == nil {
-		err = a.bark.Send(ctx, settings.Server, BarkMessage{DeviceKey: settings.Key, Title: item.CreatorName + " 发布了新视频", Body: item.VideoTitle, Group: "up-update", URL: item.VideoURL, Icon: item.Avatar, Level: effectiveBarkLevel(settings, time.Now()), Sound: settings.Sound})
+	if until, deferred := deliveryDeferredUntil(a.loadPollSchedule(), settings, now); deferred {
+		_, _ = a.db.Exec(`UPDATE deliveries SET deferred_until=? WHERE id=?`, until.Unix(), item.ID)
+		return
 	}
 	if err == nil {
-		_, _ = a.db.Exec(`UPDATE deliveries SET status='sent',attempts=attempts+1,last_error='',sent_at=? WHERE id=?`, time.Now().Unix(), item.ID)
+		err = a.bark.Send(ctx, settings.Server, BarkMessage{DeviceKey: settings.Key, Title: item.CreatorName + " 发布了新视频", Body: item.VideoTitle, Group: "up-update", URL: item.VideoURL, Icon: item.Avatar, Level: settings.Level, Sound: settings.Sound})
+	}
+	if err == nil {
+		_, _ = a.db.Exec(`UPDATE deliveries SET status='sent',attempts=attempts+1,deferred_until=0,last_error='',sent_at=? WHERE id=?`, now.Unix(), item.ID)
 		return
 	}
 	a.recordDeliveryFailure(item, err)

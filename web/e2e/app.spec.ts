@@ -194,6 +194,7 @@ test('Bark draft settings can be tested and saved without re-entering the key', 
   await page.getByLabel('提示音').selectOption('alarm')
   await page.getByRole('button', { name: '发送测试' }).click()
   await expect(page.getByText('已按当前表单发送测试通知')).toBeVisible()
+  await expect(page.getByText('午休延迟补发')).toBeVisible()
   expect(testBody).toMatchObject({ deviceKey: '', level: 'critical', sound: 'alarm' })
   await page.locator('.quiet-settings input[type="checkbox"]').check()
   await page.getByRole('button', { name: '保存 Bark' }).click()
