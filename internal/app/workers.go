@@ -11,12 +11,20 @@ import (
 func (a *App) runPollWorker(ctx context.Context) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	schedule := a.loadPollSchedule()
+	lastPeriod, _ := periodAt(schedule, time.Now())
+	a.requeueNormalPolls(time.Now())
 	a.pollOne(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			currentPeriod, _ := periodAt(a.loadPollSchedule(), time.Now())
+			if currentPeriod != lastPeriod {
+				a.requeueNormalPolls(time.Now())
+				lastPeriod = currentPeriod
+			}
 			a.pollOne(ctx)
 		}
 	}
@@ -55,18 +63,11 @@ func (a *App) pollOne(ctx context.Context) {
 		a.recordPollFailure(mid, "保存投稿数据失败", true)
 		return
 	}
-	interval := a.pollInterval()
+	interval := a.currentPollIntervalSeconds(time.Now())
 	next := time.Now().Add(time.Duration(interval)*time.Second + time.Duration(time.Now().UnixNano()%20)*time.Second).Unix()
 	_, _ = a.db.Exec(`UPDATE poll_states SET last_polled_at=?,next_poll_at=?,failure_count=0,last_error='' WHERE creator_mid=?`, now, next, mid)
 }
 
-func (a *App) pollInterval() int {
-	var value int
-	if a.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM app_settings WHERE key='poll_interval_seconds'`).Scan(&value) != nil || value < 60 {
-		return 300
-	}
-	return value
-}
 func (a *App) recordPollFailure(mid, message string, backoff bool) {
 	var failures int
 	_ = a.db.QueryRow(`SELECT failure_count FROM poll_states WHERE creator_mid=?`, mid).Scan(&failures)
@@ -142,9 +143,9 @@ func (a *App) deliverOne(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	server, key, level, sound, err := a.loadBark(item.UserID)
+	settings, err := a.loadBark(item.UserID)
 	if err == nil {
-		err = a.bark.Send(ctx, server, BarkMessage{DeviceKey: key, Title: item.CreatorName + " 发布了新视频", Body: item.VideoTitle, Group: "up-update", URL: item.VideoURL, Icon: item.Avatar, Level: level, Sound: sound})
+		err = a.bark.Send(ctx, settings.Server, BarkMessage{DeviceKey: settings.Key, Title: item.CreatorName + " 发布了新视频", Body: item.VideoTitle, Group: "up-update", URL: item.VideoURL, Icon: item.Avatar, Level: effectiveBarkLevel(settings, time.Now()), Sound: settings.Sound})
 	}
 	if err == nil {
 		_, _ = a.db.Exec(`UPDATE deliveries SET status='sent',attempts=attempts+1,last_error='',sent_at=? WHERE id=?`, time.Now().Unix(), item.ID)

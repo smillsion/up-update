@@ -20,9 +20,16 @@ test('desktop administration flow is usable', async ({ page }) => {
   await expect(page.locator('.mobile-nav')).toBeHidden()
   await page.getByRole('link', { name: '管理' }).click()
   await expect(page.getByRole('heading', { name: '管理' })).toBeVisible()
+  await expect(page.locator('.alert.error')).toHaveCount(0)
+  await expect(page.getByLabel('间隔（分钟）').first()).toHaveValue('120')
   await expect(page.locator('.user-info small').first()).toContainText('@admin')
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: 'test-results/desktop-admin.png', fullPage: true })
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/mobile-admin.png', fullPage: true })
+  await page.locator('.main-content').evaluate(element => { element.scrollTop = element.scrollHeight })
+  await page.screenshot({ path: 'test-results/mobile-admin-bottom.png' })
 })
 
 test('mobile settings flow fits the viewport', async ({ page }) => {
@@ -94,7 +101,7 @@ test('following import dialog works on desktop and mobile', async ({ page }) => 
   }))
   await page.route('**/api/settings', route => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ bilibili: { configured: true, autoRefresh: true, status: 'valid', name: 'tester', lastValidated: 1, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '' } }),
+    body: JSON.stringify({ bilibili: { configured: true, autoRefresh: true, status: 'valid', name: 'tester', lastValidated: 1, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '', quietEnabled: false, quietStart: '12:00', quietEnd: '14:00' } }),
   }))
   await page.route('**/api/subscriptions/import-followings', async route => {
     importRequest = route.request().postData() || ''
@@ -131,7 +138,7 @@ test('Bilibili QR login renders a scannable dialog on desktop and mobile', async
   }))
   await page.route('**/api/settings', route => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ bilibili: { configured: false, autoRefresh: false, status: 'missing', name: '', lastValidated: null, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '' } }),
+    body: JSON.stringify({ bilibili: { configured: false, autoRefresh: false, status: 'missing', name: '', lastValidated: null, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '', quietEnabled: false, quietStart: '12:00', quietEnd: '14:00' } }),
   }))
   await page.route('**/api/settings/bilibili/qrcode**', route => {
     const path = new URL(route.request().url()).pathname
@@ -158,4 +165,48 @@ test('Bilibili QR login renders a scannable dialog on desktop and mobile', async
   await expect(page.getByRole('dialog', { name: '扫码登录' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: 'test-results/mobile-bilibili-qr.png', fullPage: true })
+})
+
+test('Bark draft settings can be tested and saved without re-entering the key', async ({ page }) => {
+  let testBody: Record<string, unknown> | null = null
+  let saveBody: Record<string, unknown> | null = null
+  await page.route('**/api/auth/me', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 1, username: 'admin', displayName: 'Admin', role: 'admin', forcePasswordChange: false, csrfToken: 'csrf-test' }),
+  }))
+  await page.route('**/api/settings', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ bilibili: { configured: true, autoRefresh: true, status: 'valid', name: 'tester', lastValidated: 1, error: '' }, bark: { configured: true, server: 'https://bark.example', level: 'active', sound: '', quietEnabled: false, quietStart: '12:00', quietEnd: '14:00' } }),
+  }))
+  await page.route('**/api/settings/bark/test', route => {
+    testBody = JSON.parse(route.request().postData() || '{}')
+    return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' })
+  })
+  await page.route('**/api/settings/bark', route => {
+    saveBody = JSON.parse(route.request().postData() || '{}')
+    return route.fulfill({ contentType: 'application/json', body: '{"ok":true}' })
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/settings')
+  await expect(page.getByLabel('Device Key')).not.toHaveAttribute('required', '')
+  await page.getByLabel('通知级别').selectOption('critical')
+  await page.getByLabel('提示音').selectOption('alarm')
+  await page.getByRole('button', { name: '发送测试' }).click()
+  await expect(page.getByText('已按当前表单发送测试通知')).toBeVisible()
+  expect(testBody).toMatchObject({ deviceKey: '', level: 'critical', sound: 'alarm' })
+  await page.locator('.quiet-settings input[type="checkbox"]').check()
+  await page.getByRole('button', { name: '保存 Bark' }).click()
+  expect(saveBody).toMatchObject({ deviceKey: '', level: 'critical', sound: 'alarm', quietEnabled: true, quietStart: '12:00', quietEnd: '14:00' })
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/desktop-bark-settings.png', fullPage: true })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/mobile-bark-settings.png' })
+  await page.locator('.main-content').evaluate(element => { element.scrollTop = element.scrollHeight })
+  const saveBox = await page.getByRole('button', { name: '保存 Bark' }).boundingBox()
+  const navBox = await page.locator('.mobile-nav').boundingBox()
+  expect(saveBox && navBox && saveBox.y + saveBox.height <= navBox.y).toBeTruthy()
+  await page.screenshot({ path: 'test-results/mobile-bark-settings-bottom.png' })
 })

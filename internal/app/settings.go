@@ -24,10 +24,13 @@ type userSettings struct {
 		Error         string `json:"error"`
 	} `json:"bilibili"`
 	Bark struct {
-		Configured bool   `json:"configured"`
-		Server     string `json:"server"`
-		Level      string `json:"level"`
-		Sound      string `json:"sound"`
+		Configured   bool   `json:"configured"`
+		Server       string `json:"server"`
+		Level        string `json:"level"`
+		Sound        string `json:"sound"`
+		QuietEnabled bool   `json:"quietEnabled"`
+		QuietStart   string `json:"quietStart"`
+		QuietEnd     string `json:"quietEnd"`
 	} `json:"bark"`
 }
 
@@ -36,8 +39,8 @@ func (a *App) getSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	var result userSettings
 	var cookie, key string
 	var validated sql.NullInt64
-	err := a.db.QueryRow(`SELECT i.bili_cookie_enc,i.bili_status,i.bili_name,i.bili_last_validated,i.bili_error,i.bark_server,i.bark_key_enc,i.bark_level,i.bark_sound,EXISTS(SELECT 1 FROM bili_refresh_tokens t WHERE t.user_id=i.user_id AND t.refresh_token_enc<>'') FROM integrations i WHERE i.user_id=?`, u.ID).
-		Scan(&cookie, &result.Bilibili.Status, &result.Bilibili.Name, &validated, &result.Bilibili.Error, &result.Bark.Server, &key, &result.Bark.Level, &result.Bark.Sound, &result.Bilibili.AutoRefresh)
+	err := a.db.QueryRow(`SELECT i.bili_cookie_enc,i.bili_status,i.bili_name,i.bili_last_validated,i.bili_error,i.bark_server,i.bark_key_enc,i.bark_level,i.bark_sound,i.bark_quiet_enabled,i.bark_quiet_start,i.bark_quiet_end,EXISTS(SELECT 1 FROM bili_refresh_tokens t WHERE t.user_id=i.user_id AND t.refresh_token_enc<>'') FROM integrations i WHERE i.user_id=?`, u.ID).
+		Scan(&cookie, &result.Bilibili.Status, &result.Bilibili.Name, &validated, &result.Bilibili.Error, &result.Bark.Server, &key, &result.Bark.Level, &result.Bark.Sound, &result.Bark.QuietEnabled, &result.Bark.QuietStart, &result.Bark.QuietEnd, &result.Bilibili.AutoRefresh)
 	if err != nil {
 		writeError(w, 500, "database", "无法读取设置")
 		return
@@ -105,37 +108,83 @@ func validateBarkInput(server, key, level string) error {
 	return nil
 }
 
+type barkSettingsInput struct {
+	Server       string `json:"server"`
+	DeviceKey    string `json:"deviceKey"`
+	Level        string `json:"level"`
+	Sound        string `json:"sound"`
+	QuietEnabled bool   `json:"quietEnabled"`
+	QuietStart   string `json:"quietStart"`
+	QuietEnd     string `json:"quietEnd"`
+}
+
+func normalizeBarkSettingsInput(input *barkSettingsInput) {
+	input.Server = normalizeServerURL(input.Server)
+	input.DeviceKey = strings.TrimSpace(input.DeviceKey)
+	input.Sound = strings.TrimSpace(input.Sound)
+	if input.Level == "" {
+		input.Level = "active"
+	}
+	if input.QuietStart == "" {
+		input.QuietStart = "12:00"
+	}
+	if input.QuietEnd == "" {
+		input.QuietEnd = "14:00"
+	}
+}
+
+func validateBarkQuietInput(start, end string) error {
+	startMinute, startErr := parseClock(start)
+	endMinute, endErr := parseClock(end)
+	if startErr != nil || endErr != nil {
+		return &validationError{"午休静默时间格式不正确"}
+	}
+	if startMinute == endMinute {
+		return &validationError{"午休静默开始和结束时间不能相同"}
+	}
+	return nil
+}
+
 type validationError struct{ message string }
 
 func (e *validationError) Error() string { return e.message }
 
 func (a *App) saveBarkHandler(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Server    string `json:"server"`
-		DeviceKey string `json:"deviceKey"`
-		Level     string `json:"level"`
-		Sound     string `json:"sound"`
-	}
+	var input barkSettingsInput
 	if decodeJSON(r, &input) != nil {
 		writeError(w, 400, "invalid_request", "设置格式不正确")
 		return
 	}
-	input.Server = normalizeServerURL(input.Server)
-	input.DeviceKey = strings.TrimSpace(input.DeviceKey)
-	if input.Level == "" {
-		input.Level = "active"
+	normalizeBarkSettingsInput(&input)
+	u := userFrom(r)
+	var encrypted string
+	if err := a.db.QueryRow(`SELECT bark_key_enc FROM integrations WHERE user_id=?`, u.ID).Scan(&encrypted); err != nil {
+		writeError(w, 500, "database", "无法读取 Bark 设置")
+		return
 	}
-	if err := validateBarkInput(input.Server, input.DeviceKey, input.Level); err != nil {
+	keyForValidation := input.DeviceKey
+	if keyForValidation == "" && encrypted != "" {
+		keyForValidation = "saved"
+	}
+	if err := validateBarkInput(input.Server, keyForValidation, input.Level); err != nil {
 		writeError(w, 400, "invalid_bark", err.Error())
 		return
 	}
-	encrypted, err := a.vault.Encrypt(input.DeviceKey)
-	if err != nil {
-		writeError(w, 500, "encryption", "无法加密 Device Key")
+	if err := validateBarkQuietInput(input.QuietStart, input.QuietEnd); err != nil {
+		writeError(w, 400, "invalid_bark", err.Error())
 		return
 	}
-	u := userFrom(r)
-	_, err = a.db.Exec(`UPDATE integrations SET bark_server=?,bark_key_enc=?,bark_level=?,bark_sound=?,updated_at=? WHERE user_id=?`, input.Server, encrypted, input.Level, strings.TrimSpace(input.Sound), time.Now().Unix(), u.ID)
+	var err error
+	if input.DeviceKey != "" {
+		encrypted, err = a.vault.Encrypt(input.DeviceKey)
+		if err != nil {
+			writeError(w, 500, "encryption", "无法加密 Device Key")
+			return
+		}
+		_, err = a.db.Exec(`UPDATE integrations SET bark_server=?,bark_key_enc=?,bark_level=?,bark_sound=?,bark_quiet_enabled=?,bark_quiet_start=?,bark_quiet_end=?,updated_at=? WHERE user_id=?`, input.Server, encrypted, input.Level, input.Sound, input.QuietEnabled, input.QuietStart, input.QuietEnd, time.Now().Unix(), u.ID)
+	} else {
+		_, err = a.db.Exec(`UPDATE integrations SET bark_server=?,bark_level=?,bark_sound=?,bark_quiet_enabled=?,bark_quiet_start=?,bark_quiet_end=?,updated_at=? WHERE user_id=?`, input.Server, input.Level, input.Sound, input.QuietEnabled, input.QuietStart, input.QuietEnd, time.Now().Unix(), u.ID)
+	}
 	if err != nil {
 		writeError(w, 500, "database", "无法保存 Bark 设置")
 		return
@@ -145,26 +194,72 @@ func (a *App) saveBarkHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) testBarkHandler(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
-	server, key, level, sound, err := a.loadBark(u.ID)
-	if err != nil {
-		writeError(w, 400, "bark_missing", "请先保存 Bark 设置")
+	if r.ContentLength == 0 {
+		settings, err := a.loadBark(u.ID)
+		if err != nil {
+			writeError(w, 400, "bark_missing", "请先保存 Bark 设置")
+			return
+		}
+		if err = a.sendBarkTest(r, settings.Server, settings.Key, settings.Level, settings.Sound); err != nil {
+			writeError(w, 502, "bark_failed", err.Error())
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
-	if err = a.bark.Send(r.Context(), server, BarkMessage{DeviceKey: key, Title: "up-update 测试通知", Body: "Bark 推送配置成功", Group: "up-update", Level: level, Sound: sound}); err != nil {
+	var input barkSettingsInput
+	if decodeJSON(r, &input) != nil {
+		writeError(w, 400, "invalid_request", "设置格式不正确")
+		return
+	}
+	normalizeBarkSettingsInput(&input)
+	key := input.DeviceKey
+	if key == "" {
+		settings, err := a.loadBark(u.ID)
+		if err != nil {
+			writeError(w, 400, "bark_missing", "请输入 Device Key")
+			return
+		}
+		key = settings.Key
+	}
+	if err := validateBarkInput(input.Server, key, input.Level); err != nil {
+		writeError(w, 400, "invalid_bark", err.Error())
+		return
+	}
+	if err := a.sendBarkTest(r, input.Server, key, input.Level, input.Sound); err != nil {
 		writeError(w, 502, "bark_failed", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
-func (a *App) loadBark(userID int64) (server, key, level, sound string, err error) {
+func (a *App) sendBarkTest(r *http.Request, server, key, level, sound string) error {
+	return a.bark.Send(r.Context(), server, BarkMessage{DeviceKey: key, Title: "up-update 测试通知", Body: "Bark 推送配置成功", Group: "up-update", Level: level, Sound: sound})
+}
+
+type barkSettings struct {
+	Server, Key, Level, Sound, QuietStart, QuietEnd string
+	QuietEnabled                                    bool
+}
+
+func (a *App) loadBark(userID int64) (settings barkSettings, err error) {
 	var encrypted string
-	err = a.db.QueryRow(`SELECT bark_server,bark_key_enc,bark_level,bark_sound FROM integrations WHERE user_id=?`, userID).Scan(&server, &encrypted, &level, &sound)
+	err = a.db.QueryRow(`SELECT bark_server,bark_key_enc,bark_level,bark_sound,bark_quiet_enabled,bark_quiet_start,bark_quiet_end FROM integrations WHERE user_id=?`, userID).Scan(&settings.Server, &encrypted, &settings.Level, &settings.Sound, &settings.QuietEnabled, &settings.QuietStart, &settings.QuietEnd)
 	if err != nil || encrypted == "" {
-		return "", "", "", "", sql.ErrNoRows
+		return barkSettings{}, sql.ErrNoRows
 	}
-	key, err = a.vault.Decrypt(encrypted)
+	settings.Key, err = a.vault.Decrypt(encrypted)
 	return
+}
+
+func effectiveBarkLevel(settings barkSettings, now time.Time) string {
+	if settings.QuietEnabled {
+		local := now.In(shanghaiLocation)
+		if containsClock(clockWindow{Start: settings.QuietStart, End: settings.QuietEnd}, local.Hour()*60+local.Minute()) {
+			return "passive"
+		}
+	}
+	return settings.Level
 }
 
 func (a *App) loadBiliCookie(userID int64) (string, error) {

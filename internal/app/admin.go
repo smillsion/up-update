@@ -166,29 +166,65 @@ func (a *App) resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) getSystemHandler(w http.ResponseWriter, r *http.Request) {
-	var interval int
-	if err := a.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM app_settings WHERE key='poll_interval_seconds'`).Scan(&interval); err != nil {
-		writeError(w, 500, "database", "无法读取系统设置")
-		return
-	}
+	schedule := a.loadPollSchedule()
+	status := scheduleStatusAt(schedule, time.Now())
 	var creators, users, pending int
 	a.db.QueryRow(`SELECT COUNT(*) FROM creators WHERE EXISTS(SELECT 1 FROM subscriptions s WHERE s.creator_mid=creators.mid AND s.enabled=1)`).Scan(&creators)
 	a.db.QueryRow(`SELECT COUNT(*) FROM users WHERE enabled=1`).Scan(&users)
 	a.db.QueryRow(`SELECT COUNT(*) FROM deliveries WHERE status='pending'`).Scan(&pending)
-	writeJSON(w, 200, map[string]any{"pollIntervalSeconds": interval, "activeCreators": creators, "activeUsers": users, "pendingDeliveries": pending})
+	writeJSON(w, 200, map[string]any{
+		"pollIntervalSeconds": schedule.Free.IntervalMinutes * 60,
+		"pollSchedule":        schedule, "currentPeriod": status.CurrentPeriod,
+		"currentIntervalMinutes": status.CurrentIntervalMinutes, "nextTransitionAt": status.NextTransitionAt,
+		"activeCreators": creators, "activeUsers": users, "pendingDeliveries": pending,
+	})
 }
 func (a *App) updateSystemHandler(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		PollIntervalSeconds int `json:"pollIntervalSeconds"`
+		PollSchedule        *pollSchedule `json:"pollSchedule"`
+		PollIntervalSeconds *int          `json:"pollIntervalSeconds"`
 	}
-	if decodeJSON(r, &input) != nil || input.PollIntervalSeconds < 60 || input.PollIntervalSeconds > 3600 {
-		writeError(w, 400, "invalid_interval", "轮询间隔必须在 60–3600 秒之间")
+	if decodeJSON(r, &input) != nil || (input.PollSchedule == nil && input.PollIntervalSeconds == nil) {
+		writeError(w, 400, "invalid_schedule", "轮询时间表格式不正确")
 		return
 	}
-	_, err := a.db.Exec(`UPDATE app_settings SET value=? WHERE key='poll_interval_seconds'`, strconv.Itoa(input.PollIntervalSeconds))
+	var schedule pollSchedule
+	if input.PollSchedule != nil {
+		schedule = *input.PollSchedule
+	} else {
+		if *input.PollIntervalSeconds < 60 || *input.PollIntervalSeconds > 86400 {
+			writeError(w, 400, "invalid_interval", "轮询间隔必须在 60–86400 秒之间")
+			return
+		}
+		schedule = a.loadPollSchedule()
+		schedule.Free.IntervalMinutes = (*input.PollIntervalSeconds + 59) / 60
+	}
+	if err := validatePollSchedule(schedule); err != nil {
+		writeError(w, 400, "invalid_schedule", err.Error())
+		return
+	}
+	encoded, err := encodePollSchedule(schedule)
+	if err != nil {
+		writeError(w, 500, "encoding", "无法保存轮询时间表")
+		return
+	}
+	tx, err := a.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, 500, "database", "无法保存系统设置")
 		return
 	}
+	defer tx.Rollback()
+	_, err = tx.Exec(`INSERT INTO app_settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, pollScheduleKey, encoded)
+	if err == nil {
+		_, err = tx.Exec(`INSERT INTO app_settings(key,value) VALUES('poll_interval_seconds',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`, strconv.Itoa(schedule.Free.IntervalMinutes*60))
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		writeError(w, 500, "database", "无法保存系统设置")
+		return
+	}
+	a.requeueNormalPolls(time.Now())
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

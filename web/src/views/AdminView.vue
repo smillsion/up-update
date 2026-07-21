@@ -1,21 +1,46 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { Plus, Save, Shield, UserCog, X, KeyRound, Activity, Bell, Users } from 'lucide-vue-next'
+import { Activity, Bell, BriefcaseBusiness, Clock3, KeyRound, Moon, Plus, Save, Shield, Trash2, UserCog, Users, X, Zap } from 'lucide-vue-next'
 import { json, request } from '../api'
+
 interface AdminUser{id:number;username:string;displayName:string;role:string;enabled:boolean;forcePasswordChange:boolean;createdAt:number;bilibiliStatus:string;barkConfigured:boolean;subscriptions:number}
-interface SystemInfo{pollIntervalSeconds:number;activeCreators:number;activeUsers:number;pendingDeliveries:number}
-const users=ref<AdminUser[]>([]),system=ref<SystemInfo|null>(null),showAdd=ref(false),resetUser=ref<AdminUser|null>(null),username=ref(''),displayName=ref(''),password=ref(''),interval=ref(300),error=ref(''),message=ref(''),saving=ref(false)
-async function load(){try{[users.value,system.value]=await Promise.all([request<AdminUser[]>('/admin/users'),request<SystemInfo>('/admin/system')]);if(system.value)interval.value=system.value.pollIntervalSeconds}catch(e){error.value=e instanceof Error?e.message:'加载失败'}}
+interface ClockWindow{start:string;end:string}
+interface PollSchedule{timezone:'Asia/Shanghai';sleep:{start:string;end:string;intervalMinutes:number};work:{windows:ClockWindow[];intervalMinutes:number};free:{intervalMinutes:number}}
+interface SystemInfo{pollIntervalSeconds:number;pollSchedule:PollSchedule;currentPeriod:'sleep'|'work'|'free';currentIntervalMinutes:number;nextTransitionAt:number;activeCreators:number;activeUsers:number;pendingDeliveries:number}
+
+const defaultSchedule:PollSchedule={timezone:'Asia/Shanghai',sleep:{start:'00:00',end:'08:00',intervalMinutes:120},work:{windows:[{start:'09:00',end:'12:00'},{start:'14:00',end:'18:00'}],intervalMinutes:15},free:{intervalMinutes:5}}
+const users=ref<AdminUser[]>([]),system=ref<SystemInfo|null>(null),schedule=ref<PollSchedule>(structuredClone(defaultSchedule)),showAdd=ref(false),resetUser=ref<AdminUser|null>(null),username=ref(''),displayName=ref(''),password=ref(''),error=ref(''),message=ref(''),saving=ref(false)
+
+async function load(){
+  try{
+    const [loadedUsers,loadedSystem]=await Promise.all([request<AdminUser[]>('/admin/users'),request<SystemInfo>('/admin/system')])
+    users.value=loadedUsers
+    schedule.value=structuredClone(loadedSystem.pollSchedule)
+    system.value=loadedSystem
+  }catch(e){error.value=e instanceof Error?e.message:'加载失败'}
+}
 async function add(){saving.value=true;error.value='';try{await request('/admin/users',json('POST',{username:username.value,displayName:displayName.value,temporaryPassword:password.value}));showAdd.value=false;username.value='';displayName.value='';password.value='';message.value='用户已创建';await load()}catch(e){error.value=e instanceof Error?e.message:'创建失败'}finally{saving.value=false}}
 async function toggle(user:AdminUser){try{await request(`/admin/users/${user.id}`,json('PATCH',{displayName:user.displayName,enabled:!user.enabled}));await load()}catch(e){error.value=e instanceof Error?e.message:'更新失败'}}
 async function reset(){if(!resetUser.value)return;saving.value=true;try{await request(`/admin/users/${resetUser.value.id}/reset-password`,json('POST',{temporaryPassword:password.value}));resetUser.value=null;password.value='';message.value='临时密码已更新';await load()}catch(e){error.value=e instanceof Error?e.message:'重置失败'}finally{saving.value=false}}
-async function saveSystem(){try{await request('/admin/system',json('PUT',{pollIntervalSeconds:interval.value}));message.value='轮询设置已保存';await load()}catch(e){error.value=e instanceof Error?e.message:'保存失败'}}
+async function saveSystem(){saving.value=true;error.value='';try{await request('/admin/system',json('PUT',{pollSchedule:schedule.value}));message.value='轮询时间表已保存';await load()}catch(e){error.value=e instanceof Error?e.message:'保存失败'}finally{saving.value=false}}
+function addWorkWindow(){if(schedule.value.work.windows.length<4)schedule.value.work.windows.push({start:'09:00',end:'18:00'})}
+function removeWorkWindow(index:number){if(schedule.value.work.windows.length>1)schedule.value.work.windows.splice(index,1)}
+function periodName(value:SystemInfo['currentPeriod']){return value==='sleep'?'睡眠':value==='work'?'工作':'空闲'}
+function transitionTime(value:number){return new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false,timeZone:'Asia/Shanghai'}).format(value*1000)}
 onMounted(load)
 </script>
+
 <template><section class="page"><header class="page-header"><div><p class="eyebrow">实例管理</p><h1>管理</h1></div><button class="primary" @click="showAdd=true"><Plus :size="18"/>新用户</button></header><p v-if="error" class="alert error">{{error}}</p><p v-if="message" class="alert success">{{message}}</p>
   <div v-if="system" class="stats-grid"><div><Users :size="19"/><strong>{{system.activeUsers}}</strong><span>活跃用户</span></div><div><Activity :size="19"/><strong>{{system.activeCreators}}</strong><span>监控 UP 主</span></div><div><Bell :size="19"/><strong>{{system.pendingDeliveries}}</strong><span>等待推送</span></div></div>
   <section class="admin-section"><header><h2>用户</h2></header><div class="user-table"><article v-for="user in users" :key="user.id" class="user-row"><span class="user-initial">{{user.displayName.slice(0,1).toUpperCase()}}</span><div class="user-info"><strong>{{user.displayName}}<Shield v-if="user.role==='admin'" :size="14"/></strong><small>@{{user.username}} · {{user.subscriptions}} 个订阅</small></div><div class="integration-badges"><span :class="user.bilibiliStatus==='valid'?'ok':''">B站</span><span :class="user.barkConfigured?'ok':''">Bark</span></div><div class="row-actions"><button v-if="user.role!=='admin'" class="icon-button" title="重置密码" @click="resetUser=user;password='' "><KeyRound :size="17"/></button><button v-if="user.role!=='admin'" class="secondary small-button" @click="toggle(user)">{{user.enabled?'停用':'启用'}}</button></div></article></div></section>
-  <section class="admin-section"><header><h2>轮询</h2></header><form class="inline-form" @submit.prevent="saveSystem"><label>检查间隔（秒）<input v-model.number="interval" type="number" min="60" max="3600" step="30" /></label><button class="primary"><Save :size="18"/>保存</button></form></section>
+  <section class="admin-section"><header class="admin-heading"><div><h2>分时轮询</h2><p v-if="system"><Clock3 :size="14"/>当前为{{periodName(system.currentPeriod)}}模式，每 {{system.currentIntervalMinutes}} 分钟检查；{{transitionTime(system.nextTransitionAt)}} 切换</p></div></header>
+    <form class="schedule-form" @submit.prevent="saveSystem">
+      <div class="schedule-row"><span class="schedule-icon sleep"><Moon :size="18"/></span><div class="schedule-main"><strong>睡眠时间</strong><div class="schedule-fields"><label>开始<input v-model="schedule.sleep.start" type="time" required /></label><label>结束<input v-model="schedule.sleep.end" type="time" required /></label><label>间隔（分钟）<input v-model.number="schedule.sleep.intervalMinutes" type="number" min="1" max="1440" required /></label></div></div></div>
+      <div class="schedule-row"><span class="schedule-icon work"><BriefcaseBusiness :size="18"/></span><div class="schedule-main"><strong>工作时间</strong><div class="work-window-list"><div v-for="(window,index) in schedule.work.windows" :key="index" class="work-window"><label>开始<input v-model="window.start" type="time" required /></label><label>结束<input v-model="window.end" type="time" required /></label><button type="button" class="icon-button compact" title="删除工作时段" :disabled="schedule.work.windows.length===1" @click="removeWorkWindow(index)"><Trash2 :size="16"/></button></div></div><div class="schedule-footer"><label>间隔（分钟）<input v-model.number="schedule.work.intervalMinutes" type="number" min="1" max="1440" required /></label><button type="button" class="secondary small-button" :disabled="schedule.work.windows.length>=4" @click="addWorkWindow"><Plus :size="16"/>添加时段</button></div></div></div>
+      <div class="schedule-row"><span class="schedule-icon free"><Zap :size="18"/></span><div class="schedule-main"><strong>空闲时间</strong><p>睡眠和工作时段之外自动使用</p><div class="schedule-fields single"><label>间隔（分钟）<input v-model.number="schedule.free.intervalMinutes" type="number" min="1" max="1440" required /></label></div></div></div>
+      <div class="schedule-actions"><span>时区：Asia/Shanghai</span><button class="primary" :disabled="saving"><Save :size="18"/>保存时间表</button></div>
+    </form>
+  </section>
 </section>
 <div v-if="showAdd" class="modal-backdrop" @click.self="showAdd=false"><section class="modal"><header><div><p class="eyebrow">账号</p><h2>创建用户</h2></div><button class="icon-button" title="关闭" @click="showAdd=false"><X :size="20"/></button></header><form @submit.prevent="add"><label>用户名<input v-model.trim="username" pattern="[a-zA-Z0-9_.-]{3,32}" required /></label><label>显示名称<input v-model.trim="displayName" maxlength="40" required /></label><label>临时密码<input v-model="password" type="password" minlength="10" required /></label><div class="modal-actions"><button type="button" class="secondary" @click="showAdd=false">取消</button><button class="primary" :disabled="saving"><UserCog :size="18"/>创建</button></div></form></section></div>
 <div v-if="resetUser" class="modal-backdrop" @click.self="resetUser=null"><section class="modal"><header><div><p class="eyebrow">{{resetUser.displayName}}</p><h2>重置密码</h2></div><button class="icon-button" title="关闭" @click="resetUser=null"><X :size="20"/></button></header><form @submit.prevent="reset"><label>新临时密码<input v-model="password" type="password" minlength="10" autofocus required /></label><div class="modal-actions"><button type="button" class="secondary" @click="resetUser=null">取消</button><button class="primary" :disabled="saving"><KeyRound :size="18"/>重置</button></div></form></section></div>

@@ -28,11 +28,72 @@ func openDB(cfg Config) (*sql.DB, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate database: %w", err)
 	}
+	if err = migrateSettings(db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate settings: %w", err)
+	}
 	if err = ensureAdmin(db, cfg); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+func migrateSettings(db *sql.DB) error {
+	columns := []struct {
+		name       string
+		definition string
+	}{
+		{"bark_quiet_enabled", "INTEGER NOT NULL DEFAULT 0"},
+		{"bark_quiet_start", "TEXT NOT NULL DEFAULT '12:00'"},
+		{"bark_quiet_end", "TEXT NOT NULL DEFAULT '14:00'"},
+	}
+	for _, column := range columns {
+		exists, err := tableHasColumn(db, "integrations", column.name)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			if _, err := db.Exec("ALTER TABLE integrations ADD COLUMN " + column.name + " " + column.definition); err != nil {
+				return err
+			}
+		}
+	}
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM app_settings WHERE key=?`, pollScheduleKey).Scan(&count); err != nil {
+		return err
+	}
+	if count == 0 {
+		legacyInterval := 300
+		_ = db.QueryRow(`SELECT CAST(value AS INTEGER) FROM app_settings WHERE key='poll_interval_seconds'`).Scan(&legacyInterval)
+		encoded, err := encodePollSchedule(defaultPollSchedule(legacyInterval))
+		if err != nil {
+			return err
+		}
+		_, err = db.Exec(`INSERT INTO app_settings(key,value) VALUES(?,?)`, pollScheduleKey, encoded)
+		return err
+	}
+	return nil
+}
+
+func tableHasColumn(db *sql.DB, table, column string) (bool, error) {
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func ensureAdmin(db *sql.DB, cfg Config) error {

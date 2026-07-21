@@ -422,7 +422,7 @@ func (a *App) importFollowingsHandler(w http.ResponseWriter, r *http.Request) {
 			a.recordBiliAuthError(u.ID, result.Err)
 		}
 	}
-	interval := a.pollInterval()
+	interval := a.currentPollIntervalSeconds(time.Now())
 	tx, err := a.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "database", "无法导入关注列表")

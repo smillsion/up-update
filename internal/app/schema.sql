@@ -32,6 +32,9 @@ CREATE TABLE IF NOT EXISTS integrations (
   bark_key_enc TEXT NOT NULL DEFAULT '',
   bark_level TEXT NOT NULL DEFAULT 'active',
   bark_sound TEXT NOT NULL DEFAULT '',
+  bark_quiet_enabled INTEGER NOT NULL DEFAULT 0,
+  bark_quiet_start TEXT NOT NULL DEFAULT '12:00',
+  bark_quiet_end TEXT NOT NULL DEFAULT '14:00',
   updated_at INTEGER NOT NULL
 );
 
