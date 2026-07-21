@@ -62,6 +62,27 @@ $keyBytes = New-Object byte[] 32
 
 新增订阅时只记录当前最新投稿作为基线，不会推送旧视频。默认每 5 分钟轮询一次，可由管理员调整为 1–60 分钟。
 
+## 获取 B 站 Cookie
+
+推荐使用电脑上的 Chrome 或 Edge 获取完整 Cookie。不要使用 `document.cookie`，它可能无法读取带有 `HttpOnly` 属性的登录 Cookie。
+
+1. 打开 [哔哩哔哩网页版](https://www.bilibili.com/)并登录需要用于监控的账号。
+2. 按 `F12` 打开开发者工具，进入“网络（Network）”面板。
+3. 在过滤框输入 `x/web-interface/nav`，然后刷新页面。
+4. 点击地址为 `https://api.bilibili.com/x/web-interface/nav` 的请求。
+5. 打开“标头（Headers）”，在“请求标头（Request Headers）”中找到 `cookie`。
+6. 复制 `cookie:` 后面的完整内容，登录 up-update，在“设置”页面粘贴并点击“验证并保存”。
+
+Cookie 通常类似：
+
+```text
+buvid3=...; b_nut=...; SESSDATA=...; bili_jct=...; DedeUserID=...
+```
+
+如果没有找到 `nav` 请求，可在 Network 中过滤 `api.bilibili.com`，选择任意发往该域名的请求，再从 Request Headers 中复制完整 Cookie。不要修改其中的 `%2C`、`%2F` 等编码，也不要包含开头的 `cookie:` 字样。
+
+Cookie 相当于账号登录凭证。不要将它发送到聊天、截图、Issue、日志或 Git 仓库，建议使用单独的 B 站账号。每位用户应登录自己的 B 站账号并独立保存 Cookie；退出登录、修改密码或 Cookie 到期后，需要重新获取并保存。
+
 ## 反向代理
 
 公网部署必须使用 HTTPS，并在 `.env` 中设置 `UP_UPDATE_SECURE_COOKIES=true`。示例 Nginx 配置：
