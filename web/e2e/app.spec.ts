@@ -94,7 +94,7 @@ test('following import dialog works on desktop and mobile', async ({ page }) => 
   }))
   await page.route('**/api/settings', route => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify({ bilibili: { configured: true, status: 'valid', name: 'tester', lastValidated: 1, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '' } }),
+    body: JSON.stringify({ bilibili: { configured: true, autoRefresh: true, status: 'valid', name: 'tester', lastValidated: 1, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '' } }),
   }))
   await page.route('**/api/subscriptions/import-followings', async route => {
     importRequest = route.request().postData() || ''
@@ -122,4 +122,40 @@ test('following import dialog works on desktop and mobile', async ({ page }) => 
   await page.getByRole('button', { name: '导入选中 (1)' }).click()
   await expect(page.getByText('已导入 1 个订阅')).toBeVisible()
   expect(JSON.parse(importRequest)).toEqual({ page: 1, mids: ['2'] })
+})
+
+test('Bilibili QR login renders a scannable dialog on desktop and mobile', async ({ page }) => {
+  await page.route('**/api/auth/me', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 1, username: 'admin', displayName: 'Admin', role: 'admin', forcePasswordChange: false, csrfToken: 'csrf-test' }),
+  }))
+  await page.route('**/api/settings', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ bilibili: { configured: false, autoRefresh: false, status: 'missing', name: '', lastValidated: null, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '' } }),
+  }))
+  await page.route('**/api/settings/bilibili/qrcode**', route => {
+    const path = new URL(route.request().url()).pathname
+    if (route.request().method() === 'DELETE') return route.fulfill({ status: 204 })
+    if (path.endsWith('/poll')) return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ status: 'waiting', message: '请使用哔哩哔哩客户端扫码' }) })
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ sessionId: 'qr-test', qrUrl: 'https://passport.bilibili.com/scan?qrcode_key=test', expiresAt: 9_999_999_999 }) })
+  })
+
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/settings')
+  await page.getByRole('button', { name: '扫码登录' }).click()
+  await expect(page.getByRole('dialog', { name: '扫码登录' })).toBeVisible()
+  const darkPixels = await page.getByRole('img', { name: 'B 站登录二维码' }).evaluate((canvas: HTMLCanvasElement) => {
+    const pixels = canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data
+    let count = 0
+    for (let index = 0; index < pixels.length; index += 4) if (pixels[index] < 80 && pixels[index + 1] < 80 && pixels[index + 2] < 80 && pixels[index + 3] > 0) count++
+    return count
+  })
+  expect(darkPixels).toBeGreaterThan(1000)
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/desktop-bilibili-qr.png', fullPage: true })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect(page.getByRole('dialog', { name: '扫码登录' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/mobile-bilibili-qr.png', fullPage: true })
 })

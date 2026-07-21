@@ -164,8 +164,9 @@ func (a *App) recordDeliveryFailure(item queuedDelivery, sendErr error) {
 }
 
 func (a *App) runMaintenance(ctx context.Context) {
-	ticker := time.NewTicker(time.Hour)
+	ticker := time.NewTicker(10 * time.Minute)
 	defer ticker.Stop()
+	a.maintenance(ctx)
 	for {
 		select {
 		case <-ctx.Done():
@@ -182,13 +183,25 @@ func (a *App) maintenance(ctx context.Context) {
 func (a *App) validateOldestCookie(ctx context.Context) {
 	var userID int64
 	var encrypted string
-	err := a.db.QueryRowContext(ctx, `SELECT user_id,bili_cookie_enc FROM integrations WHERE bili_cookie_enc<>'' AND (bili_last_validated IS NULL OR bili_last_validated<?) ORDER BY COALESCE(bili_last_validated,0) LIMIT 1`, time.Now().Add(-6*time.Hour).Unix()).Scan(&userID, &encrypted)
+	var encryptedToken sql.NullString
+	err := a.db.QueryRowContext(ctx, `SELECT i.user_id,i.bili_cookie_enc,t.refresh_token_enc FROM integrations i LEFT JOIN bili_refresh_tokens t ON t.user_id=i.user_id WHERE i.bili_cookie_enc<>'' AND (i.bili_last_validated IS NULL OR i.bili_last_validated<?) ORDER BY COALESCE(i.bili_last_validated,0) LIMIT 1`, time.Now().Add(-6*time.Hour).Unix()).Scan(&userID, &encrypted, &encryptedToken)
 	if err != nil {
 		return
 	}
 	cookie, err := a.vault.Decrypt(encrypted)
 	if err != nil {
 		return
+	}
+	if encryptedToken.Valid && encryptedToken.String != "" {
+		info, infoErr := a.bili.CookieRefreshInfo(ctx, cookie)
+		if infoErr != nil {
+			a.recordCredentialCheck(userID, infoErr)
+			return
+		}
+		if info.Refresh {
+			a.refreshStoredBiliCredential(ctx, userID, encrypted, encryptedToken.String, cookie, info.Timestamp)
+			return
+		}
 	}
 	identity, err := a.bili.ValidateCookie(ctx, cookie)
 	now := time.Now().Unix()
@@ -202,6 +215,62 @@ func (a *App) validateOldestCookie(ctx context.Context) {
 		return
 	}
 	_, _ = a.db.Exec(`UPDATE integrations SET bili_status='valid',bili_name=?,bili_error='',bili_last_validated=?,updated_at=? WHERE user_id=?`, identity.Name, now, now, userID)
+}
+
+func (a *App) recordCredentialCheck(userID int64, err error) {
+	now := time.Now().Unix()
+	status := "valid"
+	var providerErr *ProviderError
+	if errors.As(err, &providerErr) && providerErr.Auth {
+		status = "invalid"
+	}
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_status=?,bili_error=?,bili_last_validated=?,updated_at=? WHERE user_id=?`, status, cleanError(err.Error()), now, now, userID)
+}
+
+func (a *App) refreshStoredBiliCredential(ctx context.Context, userID int64, oldCookieEncrypted, oldTokenEncrypted, cookie string, timestamp int64) {
+	refreshToken, err := a.vault.Decrypt(oldTokenEncrypted)
+	if err != nil {
+		a.recordCredentialCheck(userID, errors.New("无法读取加密的 B 站刷新凭证"))
+		return
+	}
+	result, err := a.bili.RefreshCookie(ctx, cookie, refreshToken, timestamp)
+	if err != nil {
+		a.recordCredentialCheck(userID, err)
+		return
+	}
+	newCookieEncrypted, err := a.vault.Encrypt(result.Cookie)
+	if err != nil {
+		return
+	}
+	newTokenEncrypted, err := a.vault.Encrypt(result.RefreshToken)
+	if err != nil {
+		return
+	}
+	now := time.Now().Unix()
+	tx, err := a.db.BeginTx(ctx, nil)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	updated, err := tx.ExecContext(ctx, `UPDATE integrations SET bili_cookie_enc=?,bili_status='valid',bili_name=?,bili_error='',bili_last_validated=?,updated_at=? WHERE user_id=? AND bili_cookie_enc=?`, newCookieEncrypted, result.Identity.Name, now, now, userID, oldCookieEncrypted)
+	if err != nil {
+		return
+	}
+	count, _ := updated.RowsAffected()
+	if count != 1 {
+		return
+	}
+	updated, err = tx.ExecContext(ctx, `UPDATE bili_refresh_tokens SET refresh_token_enc=?,refreshed_at=? WHERE user_id=? AND refresh_token_enc=?`, newTokenEncrypted, now, userID, oldTokenEncrypted)
+	if err != nil {
+		return
+	}
+	count, _ = updated.RowsAffected()
+	if count != 1 || tx.Commit() != nil {
+		return
+	}
+	if err := a.bili.ConfirmCookieRefresh(ctx, result.Cookie, refreshToken); err != nil {
+		a.logger.Warn("confirming old Bilibili refresh token failed", "user_id", userID, "error", err)
+	}
 }
 
 func nullInt64(value sql.NullInt64) *int64 {

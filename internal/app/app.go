@@ -22,6 +22,8 @@ type App struct {
 	bark       *BarkClient
 	login      *loginLimiter
 	deliveryMu sync.Mutex
+	qrMu       sync.Mutex
+	qrSessions map[string]*biliQRSession
 }
 
 func New(cfg Config, logger *slog.Logger) (*App, error) {
@@ -38,6 +40,7 @@ func New(cfg Config, logger *slog.Logger) (*App, error) {
 		cfg: cfg, db: db, vault: vault, logger: logger,
 		bili: NewBilibiliClient(cfg.BilibiliBaseURL),
 		bark: NewBarkClient(), login: newLoginLimiter(),
+		qrSessions: make(map[string]*biliQRSession),
 	}, nil
 }
 
@@ -60,6 +63,9 @@ func (a *App) Routes() http.Handler {
 				r.Use(a.passwordChanged)
 				r.Get("/settings", a.getSettingsHandler)
 				r.With(a.requireCSRF).Put("/settings/bilibili", a.saveBilibiliHandler)
+				r.With(a.requireCSRF).Post("/settings/bilibili/qrcode", a.startBilibiliQRHandler)
+				r.With(a.requireCSRF).Post("/settings/bilibili/qrcode/{id}/poll", a.pollBilibiliQRHandler)
+				r.With(a.requireCSRF).Delete("/settings/bilibili/qrcode/{id}", a.cancelBilibiliQRHandler)
 				r.With(a.requireCSRF).Put("/settings/bark", a.saveBarkHandler)
 				r.With(a.requireCSRF).Post("/settings/bark/test", a.testBarkHandler)
 				r.Get("/subscriptions", a.listSubscriptionsHandler)

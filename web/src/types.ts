@@ -1,6 +1,6 @@
 export interface User { id:number; username:string; displayName:string; role:'admin'|'user'; forcePasswordChange:boolean; csrfToken:string }
 export interface Settings {
-  bilibili:{configured:boolean;status:string;name:string;lastValidated:number|null;error:string}
+  bilibili:{configured:boolean;autoRefresh:boolean;status:string;name:string;lastValidated:number|null;error:string}
   bark:{configured:boolean;server:string;level:string;sound:string}
 }
 export interface Subscription {id:number;enabled:boolean;mid:string;name:string;avatar:string;latestBvid:string;latestTitle:string;subscribedAt:number;lastPolledAt:number|null;error:string}

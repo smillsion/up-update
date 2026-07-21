@@ -35,6 +35,12 @@ CREATE TABLE IF NOT EXISTS integrations (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS bili_refresh_tokens (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  refresh_token_enc TEXT NOT NULL,
+  refreshed_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS creators (
   mid TEXT PRIMARY KEY,
   name TEXT NOT NULL,

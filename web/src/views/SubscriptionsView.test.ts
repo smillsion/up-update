@@ -9,7 +9,7 @@ vi.mock('../api',()=>({
 }))
 
 const settings=(configured:boolean,status:string)=>({
-  bilibili:{configured,status,name:configured?'tester':'',lastValidated:null,error:''},
+  bilibili:{configured,autoRefresh:false,status,name:configured?'tester':'',lastValidated:null,error:''},
   bark:{configured:false,server:'https://api.day.app',level:'active',sound:''},
 })
 

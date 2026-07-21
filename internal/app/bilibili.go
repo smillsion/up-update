@@ -57,12 +57,17 @@ type VideoFetchResult struct {
 }
 
 type BilibiliClient struct {
-	baseURL string
-	http    *http.Client
+	baseURL     string
+	passportURL string
+	wwwURL      string
+	http        *http.Client
 }
 
 func NewBilibiliClient(baseURL string) *BilibiliClient {
-	return &BilibiliClient{baseURL: strings.TrimRight(baseURL, "/"), http: &http.Client{Timeout: 15 * time.Second}}
+	return &BilibiliClient{
+		baseURL: strings.TrimRight(baseURL, "/"), passportURL: "https://passport.bilibili.com", wwwURL: "https://www.bilibili.com",
+		http: &http.Client{Timeout: 15 * time.Second},
+	}
 }
 
 type biliEnvelope struct {

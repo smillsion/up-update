@@ -17,6 +17,7 @@ var (
 type userSettings struct {
 	Bilibili struct {
 		Configured    bool   `json:"configured"`
+		AutoRefresh   bool   `json:"autoRefresh"`
 		Status        string `json:"status"`
 		Name          string `json:"name"`
 		LastValidated *int64 `json:"lastValidated"`
@@ -35,8 +36,8 @@ func (a *App) getSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	var result userSettings
 	var cookie, key string
 	var validated sql.NullInt64
-	err := a.db.QueryRow(`SELECT bili_cookie_enc,bili_status,bili_name,bili_last_validated,bili_error,bark_server,bark_key_enc,bark_level,bark_sound FROM integrations WHERE user_id=?`, u.ID).
-		Scan(&cookie, &result.Bilibili.Status, &result.Bilibili.Name, &validated, &result.Bilibili.Error, &result.Bark.Server, &key, &result.Bark.Level, &result.Bark.Sound)
+	err := a.db.QueryRow(`SELECT i.bili_cookie_enc,i.bili_status,i.bili_name,i.bili_last_validated,i.bili_error,i.bark_server,i.bark_key_enc,i.bark_level,i.bark_sound,EXISTS(SELECT 1 FROM bili_refresh_tokens t WHERE t.user_id=i.user_id AND t.refresh_token_enc<>'') FROM integrations i WHERE i.user_id=?`, u.ID).
+		Scan(&cookie, &result.Bilibili.Status, &result.Bilibili.Name, &validated, &result.Bilibili.Error, &result.Bark.Server, &key, &result.Bark.Level, &result.Bark.Sound, &result.Bilibili.AutoRefresh)
 	if err != nil {
 		writeError(w, 500, "database", "无法读取设置")
 		return
@@ -69,7 +70,18 @@ func (a *App) saveBilibiliHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Unix()
 	u := userFrom(r)
-	_, err = a.db.Exec(`UPDATE integrations SET bili_cookie_enc=?,bili_status='valid',bili_name=?,bili_last_validated=?,bili_error='',updated_at=? WHERE user_id=?`, encrypted, identity.Name, now, now, u.ID)
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "database", "无法保存 Cookie")
+		return
+	}
+	defer tx.Rollback()
+	if _, err = tx.Exec(`UPDATE integrations SET bili_cookie_enc=?,bili_status='valid',bili_name=?,bili_last_validated=?,bili_error='',updated_at=? WHERE user_id=?`, encrypted, identity.Name, now, now, u.ID); err == nil {
+		_, err = tx.Exec(`DELETE FROM bili_refresh_tokens WHERE user_id=?`, u.ID)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
 	if err != nil {
 		writeError(w, 500, "database", "无法保存 Cookie")
 		return
