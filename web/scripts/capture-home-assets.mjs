@@ -10,10 +10,10 @@ const settings={
   bark:{configured:true,server:'https://api.day.app',level:'active',sound:'chime',quietEnabled:true,quietStart:'12:00',quietEnd:'14:00'},
 }
 const subscriptions=[
-  {id:1,enabled:true,mid:'100001',name:'科技漫游',avatar:'/app-icon.png',latestBvid:'BV1demo01',latestTitle:'一周数码观察：真正值得关注的五件事',subscribedAt:now-86400,lastPolledAt:now-65,error:''},
-  {id:2,enabled:true,mid:'100002',name:'电影手记',avatar:'/app-icon.png',latestBvid:'BV1demo02',latestTitle:'这个镜头为什么让人念念不忘',subscribedAt:now-72000,lastPolledAt:now-128,error:''},
-  {id:3,enabled:true,mid:'100003',name:'旅行观察',avatar:'/app-icon.png',latestBvid:'BV1demo03',latestTitle:'在海边小城生活三天是什么体验',subscribedAt:now-36000,lastPolledAt:now-194,error:''},
-  {id:4,enabled:false,mid:'100004',name:'独立游戏档案',avatar:'/app-icon.png',latestBvid:'BV1demo04',latestTitle:'本月值得加入愿望单的新作',subscribedAt:now-18000,lastPolledAt:now-260,error:''},
+  {id:1,enabled:true,mid:'100001',name:'科技漫游',avatar:'/app-icon.png',latestBvid:'BV1demo01',latestTitle:'一周数码观察：真正值得关注的五件事',latestPublishedAt:now-3600,subscribedAt:now-86400,lastPolledAt:now-65,error:''},
+  {id:2,enabled:true,mid:'100002',name:'电影手记',avatar:'/app-icon.png',latestBvid:'BV1demo02',latestTitle:'这个镜头为什么让人念念不忘',latestPublishedAt:now-7200,subscribedAt:now-72000,lastPolledAt:now-128,error:''},
+  {id:3,enabled:true,mid:'100003',name:'旅行观察',avatar:'/app-icon.png',latestBvid:'BV1demo03',latestTitle:'在海边小城生活三天是什么体验',latestPublishedAt:now-86400,subscribedAt:now-36000,lastPolledAt:now-194,error:''},
+  {id:4,enabled:false,mid:'100004',name:'独立游戏档案',avatar:'/app-icon.png',latestBvid:'BV1demo04',latestTitle:'本月值得加入愿望单的新作',latestPublishedAt:now-172800,subscribedAt:now-18000,lastPolledAt:now-260,error:''},
 ]
 
 await mkdir(outputDir,{recursive:true})

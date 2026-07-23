@@ -37,24 +37,8 @@ func (a *App) pollOne(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	var userID int64
-	var encrypted string
-	err = a.db.QueryRowContext(ctx, `SELECT s.user_id,i.bili_cookie_enc FROM subscriptions s JOIN users u ON u.id=s.user_id JOIN integrations i ON i.user_id=s.user_id WHERE s.creator_mid=? AND s.enabled=1 AND u.enabled=1 AND i.bili_status='valid' AND i.bili_cookie_enc<>'' ORDER BY COALESCE(i.bili_last_validated,0) DESC LIMIT 1`, mid).Scan(&userID, &encrypted)
+	videos, err := a.bili.GetLatestVideos(ctx, mid, "")
 	if err != nil {
-		a.recordPollFailure(mid, "没有可用的 B 站 Cookie", false)
-		return
-	}
-	cookie, err := a.vault.Decrypt(encrypted)
-	if err != nil {
-		a.recordPollFailure(mid, "无法读取加密 Cookie", false)
-		return
-	}
-	videos, err := a.bili.GetLatestVideos(ctx, mid, cookie)
-	if err != nil {
-		var providerErr *ProviderError
-		if errors.As(err, &providerErr) && providerErr.Auth {
-			_, _ = a.db.Exec(`UPDATE integrations SET bili_status='invalid',bili_error=?,updated_at=? WHERE user_id=?`, cleanError(err.Error()), now, userID)
-		}
 		a.recordPollFailure(mid, err.Error(), true)
 		return
 	}

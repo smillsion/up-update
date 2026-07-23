@@ -76,14 +76,14 @@ type biliEnvelope struct {
 	Data    json.RawMessage `json:"data"`
 }
 
-func (c *BilibiliClient) request(ctx context.Context, endpoint string, query url.Values, cookie string, destination any) error {
+func (c *BilibiliClient) fetchEnvelope(ctx context.Context, endpoint string, query url.Values, cookie string) (biliEnvelope, error) {
 	u := c.baseURL + endpoint
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return err
+		return biliEnvelope{}, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36")
 	req.Header.Set("Referer", "https://space.bilibili.com/")
@@ -93,34 +93,53 @@ func (c *BilibiliClient) request(ctx context.Context, endpoint string, query url
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return &ProviderError{Message: "连接 B 站失败", Retryable: true}
+		return biliEnvelope{}, &ProviderError{Message: "连接 B 站失败", Retryable: true}
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return err
+		return biliEnvelope{}, err
 	}
 	if resp.StatusCode == http.StatusPreconditionFailed {
-		return &ProviderError{Code: 412, Message: "B 站触发访问风控，请稍后重试或更新 Cookie", Retryable: true}
+		return biliEnvelope{}, &ProviderError{Code: 412, Message: "B 站触发访问风控，请稍后重试", Retryable: true}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return &ProviderError{Code: resp.StatusCode, Message: fmt.Sprintf("B 站返回 HTTP %d", resp.StatusCode), Retryable: resp.StatusCode >= 500}
+		return biliEnvelope{}, &ProviderError{Code: resp.StatusCode, Message: fmt.Sprintf("B 站返回 HTTP %d", resp.StatusCode), Retryable: resp.StatusCode >= 500}
 	}
 	var envelope biliEnvelope
 	if json.Unmarshal(body, &envelope) != nil {
-		return errors.New("B 站返回了无法解析的数据")
+		return biliEnvelope{}, errors.New("B 站返回了无法解析的数据")
 	}
+	return envelope, nil
+}
+
+func biliEnvelopeError(envelope biliEnvelope) error {
 	if envelope.Code != 0 {
 		auth := envelope.Code == -101 || envelope.Code == -400
 		retry := envelope.Code == -352 || envelope.Code == -509
 		return &ProviderError{Code: envelope.Code, Message: fmt.Sprintf("B 站接口错误：%s (%d)", envelope.Message, envelope.Code), Retryable: retry, Auth: auth}
 	}
+	return nil
+}
+
+func decodeBiliData(envelope biliEnvelope, destination any) error {
 	if destination != nil {
 		if err := json.Unmarshal(envelope.Data, destination); err != nil {
 			return fmt.Errorf("解析 B 站数据: %w", err)
 		}
 	}
 	return nil
+}
+
+func (c *BilibiliClient) request(ctx context.Context, endpoint string, query url.Values, cookie string, destination any) error {
+	envelope, err := c.fetchEnvelope(ctx, endpoint, query, cookie)
+	if err != nil {
+		return err
+	}
+	if err := biliEnvelopeError(envelope); err != nil {
+		return err
+	}
+	return decodeBiliData(envelope, destination)
 }
 
 type navData struct {
@@ -135,8 +154,20 @@ type navData struct {
 
 func (c *BilibiliClient) nav(ctx context.Context, cookie string) (navData, error) {
 	var data navData
-	err := c.request(ctx, "/x/web-interface/nav", nil, cookie, &data)
-	return data, err
+	envelope, err := c.fetchEnvelope(ctx, "/x/web-interface/nav", nil, cookie)
+	if err != nil {
+		return data, err
+	}
+	if envelope.Code != 0 && !(strings.TrimSpace(cookie) == "" && envelope.Code == -101) {
+		return data, biliEnvelopeError(envelope)
+	}
+	if err := decodeBiliData(envelope, &data); err != nil {
+		return data, err
+	}
+	if strings.TrimSpace(cookie) == "" && (data.WBIImage.ImageURL == "" || data.WBIImage.SubURL == "") {
+		return data, errors.New("无法获取 B 站请求签名")
+	}
+	return data, nil
 }
 func (c *BilibiliClient) ValidateCookie(ctx context.Context, cookie string) (BilibiliIdentity, error) {
 	if strings.TrimSpace(cookie) == "" {
