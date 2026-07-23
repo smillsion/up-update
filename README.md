@@ -1,157 +1,102 @@
-# up-update
+<p align="center">
+  <img src="web/public/app-icon.png" width="144" alt="up-update Logo">
+</p>
 
-监控哔哩哔哩 UP 主的新投稿，并通过 Bark 将原生通知推送到 iPhone。适合个人、家人或朋友共同使用的小规模自托管实例。
+<h1 align="center">up-update</h1>
 
-## 功能
+<p align="center">只关注你选择的 UP 主，新投稿通过 Bark 直接推送到 iPhone。</p>
 
-- 独立用户账号、B 站扫码登录与 Cookie 自动续期、UP 主列表和 Bark 配置
-- 有效登录 Cookie 是订阅前置条件；支持 UID、空间链接以及从 B 站关注列表批量导入，只推送订阅后的新视频
-- 官方 Bark 与自建 Bark Server，支持通知级别、提示音、午休延迟补发和使用未保存配置测试推送；点击通知直接打开本次更新的视频
-- 睡眠、工作和空闲时间分级轮询，支持失败退避、Cookie 状态检查、投递重试与分页历史记录
-- SQLite 本地存储，敏感配置 AES-256-GCM 加密
-- 单容器部署，适配桌面与移动端并支持系统深色模式
+<p align="center">
+  <img src="https://img.shields.io/badge/Go-1.26%2B-00ADD8?logo=go&logoColor=white" alt="Go 1.26+">
+  <img src="https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white" alt="Vue 3">
+  <img src="https://img.shields.io/badge/Docker-20.10%2B-2496ED?logo=docker&logoColor=white" alt="Docker 20.10+">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="MIT License"></a>
+</p>
 
-## Docker 部署
+<p align="center">
+  <a href="#主要特性">主要特性</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="docs/DEPLOYMENT.md">部署指南</a> ·
+  <a href="docs/USAGE.md">使用指南</a> ·
+  <a href="docs/CONFIGURATION.md">配置说明</a>
+</p>
 
-推荐使用 Docker Engine 20.10+。有 Docker Compose v2 时可直接使用项目中的 Compose 配置：
+up-update 最重要的作用，是让你自己决定哪些 UP 主更新时需要提醒。无需开启 B 站 App 的消息通知，也能通过 Bark 收到选定 UP 主的新投稿，避免其他不感兴趣的内容频繁打扰。
+
+项目适合个人、家人和朋友共同使用的小规模自托管场景。每位用户独立登录系统，配置自己的 B 站账号、UP 主订阅和 Bark 推送，不共享 Cookie 或推送密钥。
+
+## 主要特性
+
+| 能力 | 说明 |
+| --- | --- |
+| 精准订阅 | 只推送用户主动选择的 UP 主新投稿，无需开启 B 站 App 的消息通知 |
+| 多用户隔离 | 管理员创建用户，每位用户独立维护 B 站登录、订阅和 Bark 配置 |
+| B 站扫码登录 | 使用哔哩哔哩客户端扫码，支持 Cookie 加密保存与自动续期，保留手工 Cookie 备用方式 |
+| 灵活订阅 | 支持 UID、UP 主空间链接，以及从当前账号关注列表批量导入 |
+| 原生推送 | 支持官方或自建 Bark Server、通知级别、提示音和测试推送，点击通知直达视频 |
+| 分时轮询 | 按北京时间配置睡眠、工作和空闲时段，分别控制检查频率 |
+| 延迟补发 | 睡眠时段或用户午休时段暂停自动通知，时段结束后按队列逐条补发 |
+| 可靠投递 | 轮询失败退避、推送重试、分页投递记录和待发送通知取消 |
+| 本地存储 | SQLite 单实例存储，Cookie、刷新令牌和 Bark Device Key 使用 AES-256-GCM 加密 |
+
+## 工作流程
+
+| 1. 登录 | 2. 订阅 | 3. 监控 | 4. 推送 |
+| --- | --- | --- | --- |
+| 用户扫码登录 B 站并配置 Bark | 添加 UID、空间链接或从关注列表导入 | 后台按分时策略检查 UP 主最新投稿 | 发现新视频后通过 Bark 推送到 iPhone |
+
+新增订阅只会将当前最新投稿作为基线，不会补推订阅前的历史视频。
+
+## 快速开始
+
+需要 Docker Engine 20.10+。克隆项目并准备环境变量：
 
 ```bash
+git clone https://gitee.com/birdKiss/up-update.git
+cd up-update
 cp .env.example .env
+openssl rand -hex 32
 ```
 
-编辑 `.env`，设置初始管理员密码，并生成 32 字节随机加密密钥：
+编辑 `.env`，设置至少 10 个字符的管理员密码，并将 `openssl` 输出写入 `UP_UPDATE_ENCRYPTION_KEY`，然后启动：
 
 ```bash
-openssl rand -hex 32
 docker compose up -d --build
 ```
 
-打开 `http://服务器地址:8080`，使用 `.env` 中的管理员账号登录。管理员密码只在首次创建数据库时使用。
+打开 `http://服务器地址:8080`，使用 `.env` 中的管理员账号登录。没有 Docker Compose、需要配置 HTTPS 或准备生产环境时，请阅读[部署指南](docs/DEPLOYMENT.md)。
 
-没有 Docker Compose 时，可以使用项目根目录的部署脚本。脚本会检查 `.env`、构建镜像、保留数据卷并替换容器；监听地址固定为 `.env` 中端口对应的 `127.0.0.1`，适合由同机 Nginx 反向代理：
+## 文档
 
-```bash
-chmod +x deploy.sh
-./deploy.sh
-```
+| 文档 | 内容 |
+| --- | --- |
+| [部署指南](docs/DEPLOYMENT.md) | Docker Compose、部署脚本、升级、Nginx、日志、备份与恢复 |
+| [使用指南](docs/USAGE.md) | 用户管理、B 站登录、Bark、订阅、通知记录与常见问题 |
+| [配置说明](docs/CONFIGURATION.md) | 环境变量、加密密钥、分时轮询和个人通知设置 |
+| [参与开发](CONTRIBUTING.md) | 本地测试、提交要求与敏感信息规范 |
+| [更新记录](CHANGELOG.md) | 尚未发布和历史版本的功能变更 |
 
-脚本默认通过 `https://goproxy.cn,direct` 下载 Go 依赖。需要更换代理时可执行 `GOPROXY=https://代理地址 ./deploy.sh`。
+## 技术栈
 
-当前服务器使用 `UP_UPDATE_HTTP_PORT=10025` 时，容器会监听 `127.0.0.1:10025`。以后更新可执行：
+- Go + chi：API、后台任务与静态资源服务
+- Vue 3 + TypeScript + Vite：响应式 Web 管理界面
+- SQLite：单实例本地数据存储
+- Docker：多阶段构建和容器化部署
+- Bark：iOS 系统通知推送
 
-```bash
-cd /usr/local/up-update
-git pull
-./deploy.sh
-```
+## 安全与限制
 
-PowerShell 可用以下命令生成密钥：
+- 公网部署必须使用 HTTPS，并设置 `UP_UPDATE_SECURE_COOKIES=true`。
+- `.env`、数据库、B 站 Cookie、刷新令牌和 Bark Device Key 都不得提交到 Git 或粘贴到 Issue、日志和聊天中。
+- 恢复数据时必须使用原来的 `UP_UPDATE_ENCRYPTION_KEY`，否则敏感配置无法解密。
+- 当前版本只支持单实例运行，不要让多个容器同时读写同一个 SQLite 数据卷。
+- 项目使用哔哩哔哩非公开 Web 接口，只适合低频个人订阅。接口和风控策略可能变化，请控制使用规模并遵守相关服务条款。
 
-```powershell
-$keyBytes = New-Object byte[] 32
-[Security.Cryptography.RandomNumberGenerator]::Fill($keyBytes)
-[Convert]::ToHexString($keyBytes).ToLower()
-```
+## 参与开发
 
-## 使用
+本地开发需要 Go 1.26+ 和 Node.js 24+。提交前请运行后端测试、前端测试和构建，具体要求见[参与开发](CONTRIBUTING.md)。
 
-1. 管理员在“管理”页面创建用户，用户首次登录后修改临时密码。
-2. 用户在“设置”中选择“扫码登录”，使用哔哩哔哩客户端扫码并在手机上确认。
-3. 在 Bark App 中复制 Device Key，填写 Bark Server 并发送测试通知。
-4. 使用 UID、`https://space.bilibili.com/{uid}`，或从已登录账号的关注列表中选择 UP 主添加订阅。关注列表导入会立即初始化最新投稿；个别请求失败时订阅仍会创建，并由后台自动补齐。
-
-新增订阅时只记录当前最新投稿作为基线，不会推送旧视频。管理员可在“管理”页面调整北京时间表；默认睡眠时间 `00:00–08:00` 每 120 分钟检查，工作时间 `09:00–12:00`、`14:00–18:00` 每 15 分钟检查，其余空闲时间每 5 分钟检查。睡眠时段内检测到的自动通知会保留在队列中，结束后逐条补发。
-
-Bark Device Key 已保存后，修改通知级别、提示音或午休时段时不需要再次填写。发送测试会使用页面上的当前值但不会保存，也不受延迟时段影响；每个用户可独立开启午休延迟补发，默认时段为 `12:00–14:00`。午休或睡眠结束后，积压通知按队列逐条发送，每条仍可直接打开对应视频。
-
-## B 站登录与自动续期
-
-推荐直接使用设置页中的“扫码登录”。扫码成功后，up-update 会加密保存 B 站返回的 Cookie 和刷新令牌；后台定期检查凭证状态，并在 B 站要求刷新时自动保存新凭证。正常情况下无需再从浏览器反复复制 Cookie。
-
-自动续期不能绕过 B 站的账号安全策略。主动退出账号、修改密码、账号风控或服务器撤销会话后，仍需重新扫码。二维码登录和自动续期使用 B 站 Web 客户端的非公开接口，接口变化也可能导致功能暂时不可用。
-
-### 手工 Cookie 备用方式
-
-无法扫码时，可以展开设置页中的“手动填写 Cookie”并粘贴浏览器请求携带的完整 Cookie。手工 Cookie 没有配套刷新令牌，因此不会自动续期。
-
-推荐使用电脑上的 Chrome 或 Edge 获取完整 Cookie。不要使用 `document.cookie`，它可能无法读取带有 `HttpOnly` 属性的登录 Cookie。
-
-1. 打开 [哔哩哔哩网页版](https://www.bilibili.com/)并登录需要用于监控的账号。
-2. 按 `F12` 打开开发者工具，进入“网络（Network）”面板。
-3. 在过滤框输入 `x/web-interface/nav`，然后刷新页面。
-4. 点击地址为 `https://api.bilibili.com/x/web-interface/nav` 的请求。
-5. 打开“标头（Headers）”，在“请求标头（Request Headers）”中找到 `cookie`。
-6. 复制 `cookie:` 后面的完整内容，在 up-update 设置页展开“手动填写 Cookie”，粘贴并点击“验证并保存”。
-
-Cookie 通常类似：
-
-```text
-buvid3=...; b_nut=...; SESSDATA=...; bili_jct=...; DedeUserID=...
-```
-
-如果没有找到 `nav` 请求，可在 Network 中过滤 `api.bilibili.com`，选择任意发往该域名的请求，再从 Request Headers 中复制完整 Cookie。不要修改其中的 `%2C`、`%2F` 等编码，也不要包含开头的 `cookie:` 字样。
-
-Cookie 和刷新令牌都相当于账号登录凭证。不要将它们发送到聊天、截图、Issue、日志或 Git 仓库，建议使用单独的 B 站账号。每位用户应登录自己的 B 站账号并独立保存凭证。
-
-## 反向代理
-
-公网部署必须使用 HTTPS，并在 `.env` 中设置 `UP_UPDATE_SECURE_COOKIES=true`。示例 Nginx 配置：
-
-```nginx
-location / {
-    proxy_pass http://127.0.0.1:8080;
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-}
-```
-
-不要公开转发 SQLite 数据目录，不要提交 `.env`，也不要在 issue 或日志中粘贴 Cookie、Device Key 或加密密钥。
-
-## 数据备份
-
-当前版本只支持单实例。备份前停止容器，再导出命名卷：
-
-```bash
-docker compose stop
-docker run --rm -v up-update_up-update-data:/data -v "$PWD":/backup alpine tar czf /backup/up-update-data.tar.gz -C /data .
-docker compose start
-```
-
-恢复时必须同时使用原来的 `UP_UPDATE_ENCRYPTION_KEY`，否则已保存的 Cookie 和 Bark Key 无法解密。
-
-## 本地开发
-
-需要 Go 1.26+ 和 Node.js 24+。
-
-```bash
-cd web
-npm ci
-npm run test
-npm run build
-cd ..
-cp -r web/dist/* internal/web/dist/
-go test ./...
-go run ./cmd/server
-```
-
-启动前设置 `UP_UPDATE_ENCRYPTION_KEY` 和 `UP_UPDATE_ADMIN_PASSWORD`。前端开发服务器可使用 `npm run dev`，默认代理到 `localhost:8080`。
-
-## 数据源说明
-
-哔哩哔哩官方开放平台不能用于监控未授权关联的任意 UP 主。本项目使用非公开 Web 接口，只用于低频个人订阅；接口、签名或风控策略可能随时变化，Cookie 也可能失效。请控制使用规模并遵守哔哩哔哩服务条款。
-
-## GitHub 与 Gitee
-
-仓库不绑定具体托管平台。创建两个空远程仓库后可同时维护：
-
-```bash
-git remote add github git@github.com:YOUR_NAME/up-update.git
-git remote add gitee git@gitee.com:YOUR_NAME/up-update.git
-git push github main
-git push gitee main
-```
-
-版本使用 `vX.Y.Z` 标签。标签推送到 GitHub 后，工作流会测试项目并将多架构镜像发布到对应的 GHCR 仓库；Gitee 保持完整源码、文档和标签镜像。
+项目可同时维护 GitHub 与 Gitee 远程仓库。版本标签使用 `vX.Y.Z`；标签推送到 GitHub 后，现有工作流会测试项目并构建 `linux/amd64`、`linux/arm64` 镜像。
 
 ## License
 
