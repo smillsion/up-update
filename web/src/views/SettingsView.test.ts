@@ -42,4 +42,23 @@ describe('SettingsView',()=>{
     expect(wrapper.text()).toContain('已登录 B 站账号 tester')
     wrapper.unmount()
   })
+
+  it('confirms and removes locally stored Bilibili credentials',async()=>{
+    let configured=true
+    mocks.request.mockImplementation((path:string,options?:RequestInit)=>{
+      if(path==='/settings')return Promise.resolve(settings(configured))
+      if(path==='/settings/bilibili'&&options?.method==='DELETE'){configured=false;return Promise.resolve()}
+      return Promise.reject(new Error(`unexpected request: ${path}`))
+    })
+    const wrapper=mountView();await flushPromises()
+    const logout=wrapper.findAll('button').find(button=>button.text().includes('退出 B 站账号'))!
+    await logout.trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('不会退出手机或浏览器中的 B 站账号')
+    await wrapper.findAll('[role="dialog"] button').find(button=>button.text().includes('确认退出'))!.trigger('click')
+    await flushPromises()
+
+    expect(mocks.request).toHaveBeenCalledWith('/settings/bilibili',{method:'DELETE'})
+    expect(wrapper.text()).toContain('已退出 B 站账号')
+    expect(wrapper.text()).toContain('未配置')
+  })
 })

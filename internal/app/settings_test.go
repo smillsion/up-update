@@ -3,10 +3,12 @@ package app
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func settingsRequest(method, target, body string, userID int64) *http.Request {
@@ -90,5 +92,47 @@ func TestBarkTestUsesDraftWithoutSavingIt(t *testing.T) {
 	}
 	if stored.Level != "active" || stored.Sound != "" {
 		t.Fatalf("draft was persisted: %+v", stored)
+	}
+}
+
+func TestDeleteBilibiliCredentialsPreservesUserData(t *testing.T) {
+	a := testApp(t)
+	userID := adminUserIDForTest(t, a)
+	encryptedCookie, _ := a.vault.Encrypt("SESSDATA=saved")
+	encryptedToken, _ := a.vault.Encrypt("refresh-token")
+	encryptedBark, _ := a.vault.Encrypt("bark-key")
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_cookie_enc=?,bili_status='valid',bili_name='tester',bili_last_validated=100,bili_error='old',bark_key_enc=? WHERE user_id=?`, encryptedCookie, encryptedBark, userID)
+	_, _ = a.db.Exec(`INSERT INTO bili_refresh_tokens(user_id,refresh_token_enc,refreshed_at) VALUES(?,?,100)`, userID, encryptedToken)
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('1','UP',100)`)
+	_, _ = a.db.Exec(`INSERT INTO subscriptions(user_id,creator_mid,subscribed_at) VALUES(?,'1',100)`, userID)
+	a.qrMu.Lock()
+	a.qrSessions["active"] = &biliQRSession{ID: "active", UserID: userID, ExpiresAt: time.Now().Add(time.Minute)}
+	a.qrMu.Unlock()
+
+	request := settingsRequest(http.MethodDelete, "/api/settings/bilibili", "", userID)
+	response := httptest.NewRecorder()
+	a.deleteBilibiliHandler(response, request)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var cookie, status, name, biliError, barkKey string
+	var validated sql.NullInt64
+	if err := a.db.QueryRow(`SELECT bili_cookie_enc,bili_status,bili_name,bili_last_validated,bili_error,bark_key_enc FROM integrations WHERE user_id=?`, userID).Scan(&cookie, &status, &name, &validated, &biliError, &barkKey); err != nil {
+		t.Fatal(err)
+	}
+	if cookie != "" || status != "missing" || name != "" || validated.Valid || biliError != "" || barkKey != encryptedBark {
+		t.Fatalf("integration=(%q,%q,%q,%v,%q,%q)", cookie, status, name, validated, biliError, barkKey)
+	}
+	var tokenCount, subscriptionCount int
+	_ = a.db.QueryRow(`SELECT COUNT(*) FROM bili_refresh_tokens WHERE user_id=?`, userID).Scan(&tokenCount)
+	_ = a.db.QueryRow(`SELECT COUNT(*) FROM subscriptions WHERE user_id=?`, userID).Scan(&subscriptionCount)
+	if tokenCount != 0 || subscriptionCount != 1 {
+		t.Fatalf("tokens=%d subscriptions=%d", tokenCount, subscriptionCount)
+	}
+	a.qrMu.Lock()
+	_, qrExists := a.qrSessions["active"]
+	a.qrMu.Unlock()
+	if qrExists {
+		t.Fatal("QR session still exists")
 	}
 }
