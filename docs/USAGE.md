@@ -6,7 +6,7 @@
 
 ## 首次登录
 
-部署完成后，打开服务地址，使用 `.env` 中的 `UP_UPDATE_ADMIN_USERNAME` 和 `UP_UPDATE_ADMIN_PASSWORD` 登录。
+部署完成后，打开服务地址，在项目主页点击“登录系统”，使用 `.env` 中的 `UP_UPDATE_ADMIN_USERNAME` 和 `UP_UPDATE_ADMIN_PASSWORD` 登录。
 
 管理员账号只会在空数据库首次启动时创建。数据库中已有用户后，修改 `.env` 不会重置管理员用户名或密码。
 

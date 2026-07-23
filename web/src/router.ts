@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { session } from './state'
+import HomeView from './views/HomeView.vue'
 import LoginView from './views/LoginView.vue'
 import SubscriptionsView from './views/SubscriptionsView.vue'
 import HistoryView from './views/HistoryView.vue'
@@ -8,8 +9,9 @@ import AdminView from './views/AdminView.vue'
 import PasswordView from './views/PasswordView.vue'
 
 const router=createRouter({history:createWebHistory(),routes:[
+  {path:'/',component:HomeView,meta:{public:true}},
+  {path:'/about',component:HomeView,meta:{public:true}},
   {path:'/login',component:LoginView,meta:{public:true}},
-  {path:'/',redirect:'/subscriptions'},
   {path:'/subscriptions',component:SubscriptionsView},
   {path:'/history',component:HistoryView},
   {path:'/settings',component:SettingsView},
@@ -18,7 +20,8 @@ const router=createRouter({history:createWebHistory(),routes:[
   {path:'/:pathMatch(.*)*',redirect:'/subscriptions'}
 ]})
 router.beforeEach((to)=>{
-  if(to.meta.public){if(session.user)return '/subscriptions';return true}
+  if(to.path==='/'&&session.user)return '/subscriptions'
+  if(to.meta.public){if(to.path==='/login'&&session.user)return '/subscriptions';return true}
   if(!session.user)return '/login'
   if(session.user.forcePasswordChange&&to.path!='/password')return '/password'
   if(to.meta.admin&&session.user.role!=='admin')return '/subscriptions'

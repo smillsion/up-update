@@ -55,7 +55,7 @@ docker compose ps
 docker compose logs --tail 100 up-update
 ```
 
-默认访问地址为 `http://服务器地址:8080`。修改 `UP_UPDATE_HTTP_PORT` 后，使用新的主机端口访问。
+默认访问地址为 `http://服务器地址:8080`，打开后会先进入项目主页，再点击“登录系统”进入管理界面。修改 `UP_UPDATE_HTTP_PORT` 后，使用新的主机端口访问。
 
 Compose 配置默认将端口发布到服务器所有网络接口。如果同机使用 Nginx，建议将 `docker-compose.yml` 中的端口改为仅绑定本机：
 

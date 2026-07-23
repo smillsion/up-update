@@ -64,7 +64,7 @@ openssl rand -hex 32
 docker compose up -d --build
 ```
 
-打开 `http://服务器地址:8080`，使用 `.env` 中的管理员账号登录。没有 Docker Compose、需要配置 HTTPS 或准备生产环境时，请阅读[部署指南](docs/DEPLOYMENT.md)。
+打开 `http://服务器地址:8080` 即可看到项目主页，点击“登录系统”后使用 `.env` 中的管理员账号登录。没有 Docker Compose、需要配置 HTTPS 或准备生产环境时，请阅读[部署指南](docs/DEPLOYMENT.md)。
 
 ## 文档
 

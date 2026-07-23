@@ -13,6 +13,54 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.width)
 }
 
+test('public homepage routes visitors and authenticated users correctly', async ({ page }) => {
+  await page.route('**/api/auth/me', route => route.fulfill({
+    status: 401,
+    contentType: 'application/json',
+    body: '{"error":"未登录"}',
+  }))
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByRole('heading', { name: 'up-update', exact: true })).toBeVisible()
+  await expect(page.getByRole('link', { name: '登录系统' }).first()).toHaveAttribute('href', '/login')
+  await expectNoHorizontalOverflow(page)
+  const featuresTop = await page.locator('#features').evaluate(element => element.getBoundingClientRect().top)
+  expect(featuresTop).toBeLessThan(900)
+  await page.screenshot({ path: 'test-results/home-desktop.png', fullPage: true })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.reload()
+  await expectNoHorizontalOverflow(page)
+  await expect(page.getByRole('heading', { name: 'up-update', exact: true })).toBeVisible()
+  await page.locator('#preview').scrollIntoViewIfNeeded()
+  await expect.poll(() => page.locator('.home-product-shots img').evaluateAll(images => images.every(image => (image as HTMLImageElement).complete && (image as HTMLImageElement).naturalWidth > 0))).toBe(true)
+  await page.screenshot({ path: 'test-results/home-mobile.png', fullPage: true })
+
+  await page.setViewportSize({ width: 320, height: 700 })
+  await page.reload()
+  await expectNoHorizontalOverflow(page)
+  const mobileFeaturesTop = await page.locator('#features').evaluate(element => element.getBoundingClientRect().top)
+  expect(mobileFeaturesTop).toBeLessThan(700)
+})
+
+test('authenticated users enter subscriptions from root and can open the homepage', async ({ page }) => {
+  await page.route('**/api/auth/me', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 1, username: 'demo', displayName: '演示用户', role: 'user', forcePasswordChange: false, csrfToken: 'csrf-test' }),
+  }))
+  await page.route('**/api/subscriptions', route => route.fulfill({ contentType: 'application/json', body: '[]' }))
+  await page.route('**/api/settings', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ bilibili: { configured: false, autoRefresh: false, status: 'missing', name: '', lastValidated: null, error: '' }, bark: { configured: false, server: 'https://api.day.app', level: 'active', sound: '', quietEnabled: false, quietStart: '12:00', quietEnd: '14:00' } }),
+  }))
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/subscriptions$/)
+  await page.getByRole('link', { name: '主页', exact: true }).click()
+  await expect(page).toHaveURL(/\/about$/)
+  await expect(page.getByRole('link', { name: '进入控制台' }).first()).toHaveAttribute('href', '/subscriptions')
+})
+
 test('desktop administration flow is usable', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await login(page)
@@ -44,6 +92,16 @@ test('mobile settings flow fits the viewport', async ({ page }) => {
   await expect(page.getByLabel('Cookie')).toHaveCSS('user-select', 'text')
   await expectNoHorizontalOverflow(page)
   await page.screenshot({ path: 'test-results/mobile-settings.png' })
+
+  await page.setViewportSize({ width: 320, height: 700 })
+  await expectNoHorizontalOverflow(page)
+  await expect(page.locator('.mobile-nav')).toBeVisible()
+  const navItemsFit = await page.locator('.mobile-nav').evaluate(nav => Array.from(nav.children).every(item => {
+    const box = item.getBoundingClientRect()
+    return box.left >= 0 && box.right <= window.innerWidth
+  }))
+  expect(navItemsFit).toBe(true)
+  await page.screenshot({ path: 'test-results/mobile-settings-320.png' })
 })
 
 test('pending delivery can be cancelled without layout overflow', async ({ page }) => {

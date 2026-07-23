@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { LogIn } from 'lucide-vue-next'
+import { House, LogIn } from 'lucide-vue-next'
 import { auth } from '../api'
 import { session } from '../state'
 const router=useRouter(),username=ref(''),password=ref(''),error=ref(''),loading=ref(false)
@@ -17,6 +17,7 @@ async function submit(){error.value='';loading.value=true;try{session.user=await
         <p v-if="error" class="alert error">{{error}}</p>
         <button class="primary wide" :disabled="loading"><LogIn :size="18"/>{{loading?'正在登录':'登录'}}</button>
       </form>
+      <RouterLink to="/about" class="login-home-link"><House :size="16"/>返回项目主页</RouterLink>
     </section>
   </main>
 </template>
