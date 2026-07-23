@@ -92,6 +92,29 @@ func (a *App) saveBilibiliHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"status": "valid", "name": identity.Name, "lastValidated": now})
 }
 
+func (a *App) deleteBilibiliHandler(w http.ResponseWriter, r *http.Request) {
+	userID := userFrom(r).ID
+	a.cancelBilibiliQRSessionsForUser(userID)
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法退出 B 站账号")
+		return
+	}
+	defer tx.Rollback()
+	now := time.Now().Unix()
+	if _, err = tx.ExecContext(r.Context(), `UPDATE integrations SET bili_cookie_enc='',bili_status='missing',bili_name='',bili_last_validated=NULL,bili_error='',updated_at=? WHERE user_id=?`, now, userID); err == nil {
+		_, err = tx.ExecContext(r.Context(), `DELETE FROM bili_refresh_tokens WHERE user_id=?`, userID)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法退出 B 站账号")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func validateBarkInput(server, key, level string) error {
 	parsed, err := url.Parse(normalizeServerURL(server))
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {

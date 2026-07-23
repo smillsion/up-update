@@ -70,4 +70,21 @@ describe('SubscriptionsView',()=>{
     expect(wrapper.text()).toContain('Latest video')
     wrapper.unmount()
   })
+
+  it('shows the latest publication time and relative age',async()=>{
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-23T15:00:00+08:00'))
+    const publishedAt=Math.floor(new Date('2026-07-20T15:00:00+08:00').getTime()/1000)
+    mocks.request.mockImplementation((path:string)=>{
+      if(path==='/settings')return Promise.resolve(settings(true,'valid'))
+      if(path==='/subscriptions')return Promise.resolve([{id:1,enabled:true,mid:'1',name:'UP',avatar:'',latestBvid:'BV1',latestTitle:'Latest',latestPublishedAt:publishedAt,subscribedAt:1,lastPolledAt:publishedAt,error:''}])
+      return Promise.reject(new Error(`unexpected request: ${path}`))
+    })
+    const wrapper=mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('投稿于 2026年7月20日 15:00 · 3天前')
+    expect(wrapper.text()).toContain('上次检查')
+    wrapper.unmount()
+  })
 })

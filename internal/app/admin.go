@@ -1,6 +1,8 @@
 package app
 
 import (
+	"database/sql"
+	"errors"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -128,6 +130,87 @@ func (a *App) updateUserHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = a.db.Exec(`DELETE FROM sessions WHERE user_id=?`, id)
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+func (a *App) deleteUserHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := adminUserID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_id", "用户编号不正确")
+		return
+	}
+	var input struct {
+		ConfirmUsername string `json:"confirmUsername"`
+	}
+	if decodeJSON(r, &input) != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "请输入目标用户名确认删除")
+		return
+	}
+	current := userFrom(r)
+	if current.ID == id {
+		writeError(w, http.StatusBadRequest, "cannot_delete_self", "不能删除当前账号")
+		return
+	}
+	var username, role string
+	err = a.db.QueryRowContext(r.Context(), `SELECT username,role FROM users WHERE id=?`, id).Scan(&username, &role)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "not_found", "用户不存在")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取用户")
+		return
+	}
+	if role == "admin" {
+		writeError(w, http.StatusBadRequest, "cannot_delete_admin", "不能删除管理员账号")
+		return
+	}
+	if input.ConfirmUsername != username {
+		writeError(w, http.StatusBadRequest, "confirmation_mismatch", "确认用户名不匹配")
+		return
+	}
+	a.cancelBilibiliQRSessionsForUser(id)
+	tx, err := a.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法删除用户")
+		return
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(r.Context(), `SELECT creator_mid FROM subscriptions WHERE user_id=?`, id)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法读取用户订阅")
+		return
+	}
+	creatorMIDs := []string{}
+	for rows.Next() {
+		var mid string
+		if err = rows.Scan(&mid); err != nil {
+			break
+		}
+		creatorMIDs = append(creatorMIDs, mid)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	if closeErr := rows.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		_, err = tx.ExecContext(r.Context(), `DELETE FROM users WHERE id=? AND role<>'admin'`, id)
+	}
+	for _, mid := range creatorMIDs {
+		if err != nil {
+			break
+		}
+		_, err = tx.ExecContext(r.Context(), `DELETE FROM creators WHERE mid=? AND NOT EXISTS (SELECT 1 FROM subscriptions s WHERE s.creator_mid=creators.mid) AND NOT EXISTS (SELECT 1 FROM videos v JOIN deliveries d ON d.bvid=v.bvid WHERE v.creator_mid=creators.mid)`, mid)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database", "无法删除用户")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 func (a *App) resetPasswordHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := adminUserID(r)

@@ -24,6 +24,16 @@ async function loadFollowings(page:number){followingLoading.value=true;following
 function selectFollowing(item:Following,event:Event){const input=event.target as HTMLInputElement;if(input.checked){if(selected.value.length>=20){input.checked=false;followingError.value='每次最多选择 20 个关注账号';return}selected.value=[...selected.value,item.mid]}else selected.value=selected.value.filter(mid=>mid!==item.mid)}
 async function importSelected(){if(!followings.value||!selected.value.length)return;saving.value=true;followingError.value='';try{const result=await request<FollowingImportResult>('/subscriptions/import-followings',json('POST',{page:followings.value.page,mids:selected.value}));showImport.value=false;message.value=`已导入 ${result.imported} 个订阅${result.skipped?`，跳过 ${result.skipped} 个已订阅账号`:''}${result.pending?`，${result.pending} 个正在后台获取最新投稿`:''}`;initializationAttempts.value=0;await load()}catch(e){followingError.value=e instanceof Error?e.message:'导入失败'}finally{saving.value=false}}
 function date(value:number|null){return value?new Intl.DateTimeFormat('zh-CN',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}).format(value*1000):'等待首次检查'}
+function publishedDate(value:number){return new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'long',day:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}).format(value*1000)}
+function publishedAgo(value:number){
+  const seconds=Math.max(0,Math.floor(Date.now()/1000-value))
+  if(seconds<60)return '刚刚'
+  if(seconds<3600)return `${Math.floor(seconds/60)}分钟前`
+  if(seconds<86400)return `${Math.floor(seconds/3600)}小时前`
+  if(seconds<2592000)return `${Math.floor(seconds/86400)}天前`
+  if(seconds<31536000)return `${Math.floor(seconds/2592000)}个月前`
+  return `${Math.floor(seconds/31536000)}年前`
+}
 onMounted(()=>load())
 onBeforeUnmount(stopInitializationRefresh)
 </script>
@@ -39,7 +49,7 @@ onBeforeUnmount(stopInitializationRefresh)
     <div v-else class="subscription-list">
       <article v-for="item in items" :key="item.id" class="subscription-card" :class="{muted:!item.enabled}">
         <img :src="item.avatar" alt="" class="avatar"/>
-        <div class="subscription-main"><div class="subscription-title"><h2>{{item.name}}</h2><span class="uid">UID {{item.mid}}</span></div><a v-if="item.latestBvid" :href="`https://www.bilibili.com/video/${item.latestBvid}`" target="_blank" rel="noreferrer">{{item.latestTitle}}<ExternalLink :size="14"/></a><p v-else-if="!item.lastPolledAt&&!item.error">正在获取最新投稿</p><p v-else>尚无公开视频</p><small :class="{danger:item.error}">{{item.error||`上次检查：${date(item.lastPolledAt)}`}}</small></div>
+        <div class="subscription-main"><div class="subscription-title"><h2>{{item.name}}</h2><span class="uid">UID {{item.mid}}</span></div><a v-if="item.latestBvid" :href="`https://www.bilibili.com/video/${item.latestBvid}`" target="_blank" rel="noreferrer">{{item.latestTitle}}<ExternalLink :size="14"/></a><p v-else-if="!item.lastPolledAt&&!item.error">正在获取最新投稿</p><p v-else>尚无公开视频</p><small v-if="item.latestBvid" class="published-time">{{item.latestPublishedAt?`投稿于 ${publishedDate(item.latestPublishedAt)} · ${publishedAgo(item.latestPublishedAt)}`:'投稿时间未知'}}</small><small :class="{danger:item.error}">{{item.error||`上次检查：${date(item.lastPolledAt)}`}}</small></div>
         <div class="row-actions"><label class="switch" :title="item.enabled?'暂停订阅':'启用订阅'"><input type="checkbox" :checked="item.enabled" @change="toggle(item)"/><span/></label><button class="icon-button danger-button" title="删除订阅" @click="remove(item)"><Trash2 :size="18"/></button></div>
       </article>
     </div>
