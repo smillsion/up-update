@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import { AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, ListPlus, Plus, RefreshCw, Trash2, UserRound, X } from 'lucide-vue-next'
+import { AlertTriangle, ChevronLeft, ChevronRight, ExternalLink, Info, ListPlus, Plus, RefreshCw, Trash2, UserRound, X } from 'lucide-vue-next'
 import { json, request } from '../api'
 import type { Following, FollowingImportResult, PageResult, Settings, Subscription } from '../types'
 
@@ -40,12 +40,12 @@ onBeforeUnmount(stopInitializationRefresh)
 
 <template>
   <section class="page">
-    <header class="page-header"><div><p class="eyebrow">视频追踪</p><h1>UP 主订阅</h1><p>{{items.length}} 个订阅</p></div><div class="header-actions"><button class="icon-button" title="刷新" @click="refresh"><RefreshCw :size="19"/></button><button class="icon-button" title="从关注导入" :disabled="!cookieReady" @click="openImport"><ListPlus :size="19"/></button><button class="primary" :disabled="!cookieReady" @click="showAdd=true"><Plus :size="18"/>添加</button></div></header>
-    <p v-if="settings&&!cookieReady" class="alert warning"><AlertTriangle :size="17"/><span>订阅功能需要有效的 B 站 Cookie</span><RouterLink to="/settings">前往设置</RouterLink></p>
+    <header class="page-header"><div><p class="eyebrow">视频追踪</p><h1>UP 主订阅</h1><p>{{items.length}} 个订阅</p></div><div class="header-actions"><button class="icon-button" title="刷新" @click="refresh"><RefreshCw :size="19"/></button><button class="icon-button" :title="cookieReady?'从关注导入':'登录 B 站后可从关注导入'" :disabled="!cookieReady" @click="openImport"><ListPlus :size="19"/></button><button class="primary" @click="showAdd=true"><Plus :size="18"/>添加</button></div></header>
+    <p v-if="settings&&!cookieReady" class="alert info"><Info :size="17"/><span>UID 或空间链接可直接订阅；登录 B 站后还可从关注列表导入</span><RouterLink to="/settings">登录 B 站</RouterLink></p>
     <p v-if="message" class="alert success">{{message}}</p>
     <p v-if="error&&!showAdd" class="alert error"><AlertTriangle :size="17"/>{{error}}</p>
     <div v-if="loading" class="loading-state"><span class="spinner"/>正在加载</div>
-    <div v-else-if="!items.length" class="empty-state"><UserRound :size="34"/><h2>还没有订阅</h2><button class="primary" :disabled="!cookieReady" @click="showAdd=true"><Plus :size="18"/>添加 UP 主</button></div>
+    <div v-else-if="!items.length" class="empty-state"><UserRound :size="34"/><h2>还没有订阅</h2><button class="primary" @click="showAdd=true"><Plus :size="18"/>添加 UP 主</button></div>
     <div v-else class="subscription-list">
       <article v-for="item in items" :key="item.id" class="subscription-card" :class="{muted:!item.enabled}">
         <img :src="item.avatar" alt="" class="avatar"/>

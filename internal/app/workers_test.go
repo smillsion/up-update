@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -46,6 +47,45 @@ func TestRecordVideosUsesSubscriptionBaseline(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("deliveries=%d, want 1", count)
+	}
+}
+
+func TestPollOneWorksWithoutBilibiliCookie(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "" {
+			t.Error("anonymous poll included a cookie")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录","data":{"isLogin":false,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/space/wbi/arc/search":
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[{"bvid":"new","title":"New video","created":200}]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	userID := adminUserIDForTest(t, a)
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,latest_bvid,updated_at) VALUES('1','UP','old',100)`)
+	_, _ = a.db.Exec(`INSERT INTO subscriptions(user_id,creator_mid,baseline_bvid,subscribed_at) VALUES(?,'1','old',100)`, userID)
+	_, _ = a.db.Exec(`INSERT INTO poll_states(creator_mid,next_poll_at) VALUES('1',0)`)
+
+	a.pollOne(context.Background())
+
+	var deliveries int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM deliveries WHERE user_id=? AND bvid='new'`, userID).Scan(&deliveries); err != nil {
+		t.Fatal(err)
+	}
+	var pollError string
+	if err := a.db.QueryRow(`SELECT last_error FROM poll_states WHERE creator_mid='1'`).Scan(&pollError); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 1 || pollError != "" {
+		t.Fatalf("deliveries=%d pollError=%q", deliveries, pollError)
 	}
 }
 

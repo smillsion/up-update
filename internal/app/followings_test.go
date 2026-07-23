@@ -26,16 +26,26 @@ func configureTestBiliCookie(t *testing.T, a *App, userID int64, cookie string) 
 func TestFollowingsCanBeListedAndImported(t *testing.T) {
 	oldPublished := time.Now().Add(-time.Hour).Unix()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Cookie") != "SESSDATA=test" {
-			t.Error("cookie missing")
-		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/x/web-interface/nav":
-			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+			if r.Header.Get("Cookie") == "SESSDATA=test" {
+				fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+				return
+			}
+			if r.Header.Get("Cookie") != "" {
+				t.Error("public query used an unexpected cookie")
+			}
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录","data":{"isLogin":false,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
 		case "/x/relation/followings":
+			if r.Header.Get("Cookie") != "SESSDATA=test" {
+				t.Error("following query did not use the user's cookie")
+			}
 			fmt.Fprint(w, `{"code":0,"data":{"list":[{"mid":1,"uname":"Existing","face":"https://image/1.jpg"},{"mid":2,"uname":"New UP","face":"https://image/2.jpg"},{"mid":3,"uname":"Pending UP","face":"https://image/3.jpg"}],"total":3}}`)
 		case "/x/space/wbi/arc/search":
+			if r.Header.Get("Cookie") != "" {
+				t.Error("public video query included the user's cookie")
+			}
 			if r.URL.Query().Get("mid") == "3" {
 				fmt.Fprint(w, `{"code":-509,"message":"limited"}`)
 				return
@@ -122,8 +132,27 @@ func TestFollowingsCanBeListedAndImported(t *testing.T) {
 	}
 }
 
-func TestCreateSubscriptionWithoutCookieHasFriendlyError(t *testing.T) {
+func TestCreateSubscriptionWithoutBilibiliCookie(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "" {
+			t.Error("public subscription query included a cookie")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/x/web-interface/card":
+			fmt.Fprint(w, `{"code":0,"data":{"card":{"mid":"1","name":"Anonymous UP","face":"https://image/avatar.jpg"}}}`)
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录","data":{"isLogin":false,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/space/wbi/arc/search":
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[{"bvid":"BV1","title":"Latest","created":200}]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
 	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
 	handler := a.Routes()
 	cookie, user := loginRequest(t, handler, "admin", "admin-password")
 	request := httptest.NewRequest(http.MethodPost, "/api/subscriptions", bytes.NewBufferString(`{"uploader":"1"}`))
@@ -131,7 +160,42 @@ func TestCreateSubscriptionWithoutCookieHasFriendlyError(t *testing.T) {
 	request.Header.Set("X-CSRF-Token", user.CSRFToken)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest || !bytes.Contains(response.Body.Bytes(), []byte(`"code":"bilibili_missing"`)) {
+	if response.Code != http.StatusCreated {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var name, baseline string
+	if err := a.db.QueryRow(`SELECT c.name,s.baseline_bvid FROM subscriptions s JOIN creators c ON c.mid=s.creator_mid WHERE s.user_id=?`, user.ID).Scan(&name, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Anonymous UP" || baseline != "BV1" {
+		t.Fatalf("name=%q baseline=%q", name, baseline)
+	}
+}
+
+func TestCreateSubscriptionDoesNotPersistWhenAnonymousValidationFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":-509,"message":"limited"}`)
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	handler := a.Routes()
+	cookie, user := loginRequest(t, handler, "admin", "admin-password")
+	request := httptest.NewRequest(http.MethodPost, "/api/subscriptions", bytes.NewBufferString(`{"uploader":"1"}`))
+	request.AddCookie(cookie)
+	request.Header.Set("X-CSRF-Token", user.CSRFToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var subscriptions int
+	if err := a.db.QueryRow(`SELECT COUNT(*) FROM subscriptions WHERE user_id=?`, user.ID).Scan(&subscriptions); err != nil {
+		t.Fatal(err)
+	}
+	if subscriptions != 0 {
+		t.Fatalf("subscriptions=%d, want 0", subscriptions)
 	}
 }
