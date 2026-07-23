@@ -58,7 +58,7 @@ onBeforeUnmount(()=>{stopPolling();if(qrSession.value)void request(`/settings/bi
 
 <template><section class="page narrow"><header class="page-header"><div><p class="eyebrow">个人配置</p><h1>设置</h1></div></header>
   <p v-if="message" class="alert success"><CheckCircle2 :size="17"/>{{message}}</p><p v-if="error" class="alert error"><AlertTriangle :size="17"/>{{error}}</p>
-  <section class="settings-section"><header class="section-heading"><span class="section-icon coral"><Cookie :size="20"/></span><div><h2>B 站登录</h2><p v-if="settings"><span class="status-dot" :class="settings.bilibili.status"/>{{biliSummary(settings.bilibili)}}</p></div></header>
+  <section class="settings-section"><header class="section-heading"><span class="section-icon coral"><Cookie :size="20"/></span><div><h2>B 站登录 <small>可选</small></h2><p v-if="settings"><span class="status-dot" :class="settings.bilibili.status"/>{{biliSummary(settings.bilibili)}} · 用于导入关注列表</p></div></header>
     <p v-if="settings?.bilibili.error" class="inline-error">{{settings.bilibili.error}}</p>
     <div class="button-row"><button class="primary" :disabled="busy==='qr'" @click="startQR"><QrCode :size="18"/>{{busy==='qr'?'正在生成':'扫码登录'}}</button><button v-if="settings?.bilibili.configured" class="secondary danger" :disabled="busy==='bili-logout'" @click="showBiliLogout=true"><LogOut :size="18"/>退出 B 站账号</button></div>
     <details class="manual-cookie"><summary>手动填写 Cookie</summary><form @submit.prevent="saveCookie"><label>Cookie<textarea v-model="cookie" rows="4" :placeholder="settings?.bilibili.configured?'已安全保存；粘贴新 Cookie 可替换':'粘贴浏览器中的完整 Cookie'" required /></label><button class="secondary" :disabled="busy==='cookie'"><ShieldCheck :size="18"/>{{busy==='cookie'?'正在验证':'验证并保存'}}</button></form></details>

@@ -10,8 +10,8 @@ const primaryLabel=computed(()=>authenticated.value?'进入控制台':'登录系
 const appIcon='/app-icon.png'
 const features=[
   {icon:ListVideo,title:'精准订阅',body:'只推送你主动选择的 UP 主新投稿，不必开启 B 站 App 消息通知。'},
-  {icon:Users,title:'独立配置',body:'家人朋友使用自己的账号、B 站登录、订阅列表和 Bark Device Key。'},
-  {icon:QrCode,title:'扫码登录',body:'使用哔哩哔哩客户端扫码，Cookie 与刷新令牌加密保存并自动续期。'},
+  {icon:Users,title:'独立配置',body:'家人朋友使用自己的系统账号、UP 主订阅列表和 Bark Device Key。'},
+  {icon:QrCode,title:'可选扫码登录',body:'UID 可直接订阅；需要导入关注列表时，再使用哔哩哔哩客户端扫码。'},
   {icon:Clock3,title:'分时轮询',body:'睡眠、工作和空闲时间使用不同检查频率，兼顾及时性与稳定性。'},
   {icon:BellRing,title:'原生推送',body:'支持官方或自建 Bark、提示音、通知级别以及延迟补发。'},
   {icon:ShieldCheck,title:'本地存储',body:'SQLite 单实例存储，敏感凭证使用 AES-256-GCM 加密。'},
@@ -74,7 +74,7 @@ const features=[
             <h2>从选择到推送，四步完成</h2>
           </div>
           <ol>
-            <li><span>01</span><strong>登录</strong><p>扫码绑定自己的 B 站账号</p></li>
+            <li><span>01</span><strong>配置</strong><p>登录系统并填写 Bark 推送信息</p></li>
             <li><span>02</span><strong>选择</strong><p>添加 UID 或从关注列表导入</p></li>
             <li><span>03</span><strong>监控</strong><p>后台按分时策略检查新投稿</p></li>
             <li><span>04</span><strong>推送</strong><p>Bark 将更新送到你的 iPhone</p></li>

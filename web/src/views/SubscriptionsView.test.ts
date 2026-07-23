@@ -18,14 +18,15 @@ function mountView(){return mount(SubscriptionsView,{global:{stubs:{RouterLink:{
 describe('SubscriptionsView',()=>{
   afterEach(()=>{mocks.request.mockReset();vi.useRealTimers()})
 
-  it('disables subscription actions when the Bilibili cookie is unavailable',async()=>{
+  it('allows direct subscriptions without a Bilibili cookie',async()=>{
     mocks.request.mockImplementation((path:string)=>Promise.resolve(path==='/subscriptions'?[]:settings(false,'missing')))
     const wrapper=mountView()
     await flushPromises()
 
-    expect(wrapper.text()).toContain('订阅功能需要有效的 B 站 Cookie')
-    expect(wrapper.get('button[title="从关注导入"]').attributes('disabled')).toBeDefined()
-    expect(wrapper.findAll('button').find(button=>button.text()==='添加')?.attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('UID 或空间链接可直接订阅')
+    expect(wrapper.get('button[title="登录 B 站后可从关注导入"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.findAll('button').find(button=>button.text()==='添加')?.attributes('disabled')).toBeUndefined()
+    expect(wrapper.findAll('button').find(button=>button.text()==='添加 UP 主')?.attributes('disabled')).toBeUndefined()
   })
 
   it('imports selected accounts from the current following page',async()=>{

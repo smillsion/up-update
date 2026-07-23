@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -94,5 +95,46 @@ func TestBilibiliClient(t *testing.T) {
 	}
 	if len(batch) != 2 || batch[0].Err != nil || len(batch[0].Videos) != 2 || batch[1].Err == nil {
 		t.Fatalf("batch results: %#v", batch)
+	}
+}
+
+func TestBilibiliClientSupportsAnonymousPublicQueries(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录","data":{"isLogin":false,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/web-interface/card":
+			if r.Header.Get("Cookie") != "" {
+				t.Error("anonymous creator query included a cookie")
+			}
+			fmt.Fprint(w, `{"code":0,"data":{"card":{"mid":"546195","name":"测试UP","face":"https://image/avatar.jpg"}}}`)
+		case "/x/space/wbi/arc/search":
+			if r.Header.Get("Cookie") != "" {
+				t.Error("anonymous video query included a cookie")
+			}
+			if r.URL.Query().Get("w_rid") == "" {
+				t.Error("signature missing")
+			}
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[{"bvid":"BV1","title":"新视频","created":200}]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewBilibiliClient(server.URL)
+	creator, err := client.GetCreator(context.Background(), "546195", "")
+	if err != nil || creator.Name != "测试UP" {
+		t.Fatalf("creator: %#v %v", creator, err)
+	}
+	videos, err := client.GetLatestVideos(context.Background(), "546195", "")
+	if err != nil || len(videos) != 1 || videos[0].BVID != "BV1" {
+		t.Fatalf("videos: %#v %v", videos, err)
+	}
+	_, err = client.ValidateCookie(context.Background(), "SESSDATA=expired")
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || !providerErr.Auth {
+		t.Fatalf("ValidateCookie error=%v, want auth error", err)
 	}
 }

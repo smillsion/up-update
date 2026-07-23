@@ -61,6 +61,37 @@ test('authenticated users enter subscriptions from root and can open the homepag
   await expect(page.getByRole('link', { name: '进入控制台' }).first()).toHaveAttribute('href', '/subscriptions')
 })
 
+test('direct subscriptions work without a Bilibili login', async ({ page }) => {
+  let createBody: Record<string, string> | null = null
+  await page.route('**/api/auth/me', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ id: 1, username: 'demo', displayName: '演示用户', role: 'user', forcePasswordChange: false, csrfToken: 'csrf-test' }),
+  }))
+  await page.route('**/api/settings', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify({ bilibili: { configured: false, autoRefresh: false, status: 'missing', name: '', lastValidated: null, error: '' }, bark: { configured: true, server: 'https://api.day.app', level: 'active', sound: '', quietEnabled: false, quietStart: '12:00', quietEnd: '14:00' } }),
+  }))
+  await page.route('**/api/subscriptions', route => {
+    if (route.request().method() === 'POST') {
+      createBody = JSON.parse(route.request().postData() || '{}')
+      return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ id: 1, creator: { mid: '546195', name: '测试 UP', avatar: '' }, baseline: { bvid: 'BV1', title: 'Latest' } }) })
+    }
+    return route.fulfill({ contentType: 'application/json', body: '[]' })
+  })
+
+  await page.setViewportSize({ width: 390, height: 844 })
+  await page.goto('/subscriptions')
+  await expect(page.getByText('UID 或空间链接可直接订阅')).toBeVisible()
+  await expect(page.getByRole('button', { name: '登录 B 站后可从关注导入' })).toBeDisabled()
+  await page.getByRole('button', { name: '添加', exact: true }).click()
+  await page.getByLabel('UID 或空间链接').fill('https://space.bilibili.com/546195')
+  await page.getByRole('button', { name: '添加订阅' }).click()
+  await expect(page.getByText('订阅已添加')).toBeVisible()
+  expect(createBody).toEqual({ uploader: 'https://space.bilibili.com/546195' })
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: 'test-results/mobile-anonymous-subscription.png', fullPage: true })
+})
+
 test('desktop administration flow is usable', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 })
   await login(page)
