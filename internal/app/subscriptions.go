@@ -14,16 +14,17 @@ import (
 )
 
 type subscriptionView struct {
-	ID           int64  `json:"id"`
-	Enabled      bool   `json:"enabled"`
-	MID          string `json:"mid"`
-	Name         string `json:"name"`
-	Avatar       string `json:"avatar"`
-	LatestBVID   string `json:"latestBvid"`
-	LatestTitle  string `json:"latestTitle"`
-	SubscribedAt int64  `json:"subscribedAt"`
-	LastPolledAt *int64 `json:"lastPolledAt"`
-	Error        string `json:"error"`
+	ID                int64  `json:"id"`
+	Enabled           bool   `json:"enabled"`
+	MID               string `json:"mid"`
+	Name              string `json:"name"`
+	Avatar            string `json:"avatar"`
+	LatestBVID        string `json:"latestBvid"`
+	LatestTitle       string `json:"latestTitle"`
+	LatestPublishedAt *int64 `json:"latestPublishedAt"`
+	SubscribedAt      int64  `json:"subscribedAt"`
+	LastPolledAt      *int64 `json:"lastPolledAt"`
+	Error             string `json:"error"`
 }
 
 const (
@@ -75,7 +76,7 @@ func (a *App) recordBiliAuthError(userID int64, err error) {
 
 func (a *App) listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
-	rows, err := a.db.Query(`SELECT s.id,s.enabled,c.mid,c.name,c.avatar,c.latest_bvid,c.latest_title,s.subscribed_at,p.last_polled_at,COALESCE(p.last_error,'') FROM subscriptions s JOIN creators c ON c.mid=s.creator_mid LEFT JOIN poll_states p ON p.creator_mid=c.mid WHERE s.user_id=? ORDER BY s.subscribed_at DESC`, u.ID)
+	rows, err := a.db.Query(`SELECT s.id,s.enabled,c.mid,c.name,c.avatar,c.latest_bvid,c.latest_title,v.published_at,s.subscribed_at,p.last_polled_at,COALESCE(p.last_error,'') FROM subscriptions s JOIN creators c ON c.mid=s.creator_mid LEFT JOIN videos v ON v.bvid=c.latest_bvid LEFT JOIN poll_states p ON p.creator_mid=c.mid WHERE s.user_id=? ORDER BY s.subscribed_at DESC`, u.ID)
 	if err != nil {
 		writeError(w, 500, "database", "无法读取订阅")
 		return
@@ -84,8 +85,11 @@ func (a *App) listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
 	items := []subscriptionView{}
 	for rows.Next() {
 		var item subscriptionView
-		var last sql.NullInt64
-		if rows.Scan(&item.ID, &item.Enabled, &item.MID, &item.Name, &item.Avatar, &item.LatestBVID, &item.LatestTitle, &item.SubscribedAt, &last, &item.Error) == nil {
+		var published, last sql.NullInt64
+		if rows.Scan(&item.ID, &item.Enabled, &item.MID, &item.Name, &item.Avatar, &item.LatestBVID, &item.LatestTitle, &published, &item.SubscribedAt, &last, &item.Error) == nil {
+			if published.Valid {
+				item.LatestPublishedAt = &published.Int64
+			}
 			if last.Valid {
 				item.LastPolledAt = &last.Int64
 			}

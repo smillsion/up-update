@@ -174,6 +174,24 @@ func (a *App) cancelBilibiliQRHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (a *App) cancelBilibiliQRSessionsForUser(userID int64) {
+	a.qrMu.Lock()
+	sessions := make([]*biliQRSession, 0, 1)
+	for id, session := range a.qrSessions {
+		if session.UserID == userID {
+			delete(a.qrSessions, id)
+			sessions = append(sessions, session)
+		}
+	}
+	a.qrMu.Unlock()
+
+	// Wait for any in-flight poll to finish before credentials are removed.
+	for _, session := range sessions {
+		session.mu.Lock()
+		session.mu.Unlock()
+	}
+}
+
 func (a *App) saveBiliCredential(ctx context.Context, userID int64, cookie, refreshToken, name string) error {
 	if cookie == "" || refreshToken == "" {
 		return errors.New("B 站登录凭证不完整")
