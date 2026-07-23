@@ -89,6 +89,128 @@ func TestPollOneWorksWithoutBilibiliCookie(t *testing.T) {
 	}
 }
 
+func TestPollOnePrefersCookieFromSubscribedUser(t *testing.T) {
+	const preferredCookie = "SESSDATA=subscriber"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != preferredCookie {
+			t.Errorf("poll cookie=%q, want subscribed user's cookie", r.Header.Get("Cookie"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/space/wbi/arc/search":
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	userID := adminUserIDForTest(t, a)
+	configureTestBiliCookie(t, a, userID, preferredCookie)
+	unrelatedID := createMemberForDeleteTest(t, a, "unrelated")
+	configureTestBiliCookie(t, a, unrelatedID, "SESSDATA=unrelated")
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_last_validated=200 WHERE user_id=?`, unrelatedID)
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_last_validated=100 WHERE user_id=?`, userID)
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('1','UP',100),('2','Other',100)`)
+	_, _ = a.db.Exec(`INSERT INTO subscriptions(user_id,creator_mid,subscribed_at) VALUES(?,'1',100),(?,'2',100)`, userID, unrelatedID)
+	_, _ = a.db.Exec(`INSERT INTO poll_states(creator_mid,next_poll_at) VALUES('1',0)`)
+
+	a.pollOne(context.Background())
+
+	var pollError string
+	if err := a.db.QueryRow(`SELECT last_error FROM poll_states WHERE creator_mid='1'`).Scan(&pollError); err != nil {
+		t.Fatal(err)
+	}
+	if pollError != "" {
+		t.Fatalf("poll error=%q", pollError)
+	}
+}
+
+func TestPollOneMarksExpiredCookieAndUsesNextSubscriber(t *testing.T) {
+	requests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie := r.Header.Get("Cookie")
+		requests[cookie]++
+		w.Header().Set("Content-Type", "application/json")
+		if cookie == "SESSDATA=expired" {
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录"}`)
+			return
+		}
+		if cookie != "SESSDATA=valid" {
+			t.Errorf("unexpected poll cookie %q", cookie)
+		}
+		switch r.URL.Path {
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/space/wbi/arc/search":
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	validID := adminUserIDForTest(t, a)
+	expiredID := createMemberForDeleteTest(t, a, "expired")
+	configureTestBiliCookie(t, a, validID, "SESSDATA=valid")
+	configureTestBiliCookie(t, a, expiredID, "SESSDATA=expired")
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_last_validated=100 WHERE user_id=?`, validID)
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_last_validated=200 WHERE user_id=?`, expiredID)
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('1','UP',100)`)
+	_, _ = a.db.Exec(`INSERT INTO subscriptions(user_id,creator_mid,subscribed_at) VALUES(?,'1',100),(?,'1',100)`, validID, expiredID)
+	_, _ = a.db.Exec(`INSERT INTO poll_states(creator_mid,next_poll_at) VALUES('1',0)`)
+
+	a.pollOne(context.Background())
+
+	var status string
+	if err := a.db.QueryRow(`SELECT bili_status FROM integrations WHERE user_id=?`, expiredID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "invalid" || requests["SESSDATA=expired"] != 1 || requests["SESSDATA=valid"] != 2 {
+		t.Fatalf("expired status=%q requests=%v", status, requests)
+	}
+}
+
+func TestPollOneDoesNotRotateCookiesAfterRiskControl(t *testing.T) {
+	requests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie := r.Header.Get("Cookie")
+		requests[cookie]++
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"code":-352,"message":"风控校验失败"}`)
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	primaryID := adminUserIDForTest(t, a)
+	secondaryID := createMemberForDeleteTest(t, a, "secondary")
+	configureTestBiliCookie(t, a, primaryID, "SESSDATA=primary")
+	configureTestBiliCookie(t, a, secondaryID, "SESSDATA=secondary")
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_last_validated=200 WHERE user_id=?`, primaryID)
+	_, _ = a.db.Exec(`UPDATE integrations SET bili_last_validated=100 WHERE user_id=?`, secondaryID)
+	_, _ = a.db.Exec(`INSERT INTO creators(mid,name,updated_at) VALUES('1','UP',100)`)
+	_, _ = a.db.Exec(`INSERT INTO subscriptions(user_id,creator_mid,subscribed_at) VALUES(?,'1',100),(?,'1',100)`, primaryID, secondaryID)
+	_, _ = a.db.Exec(`INSERT INTO poll_states(creator_mid,next_poll_at) VALUES('1',0)`)
+
+	a.pollOne(context.Background())
+
+	var pollError string
+	var failures int
+	if err := a.db.QueryRow(`SELECT last_error,failure_count FROM poll_states WHERE creator_mid='1'`).Scan(&pollError, &failures); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 1 || pollError == "" || requests["SESSDATA=primary"] != 1 || requests["SESSDATA=secondary"] != 0 || requests[""] != 0 {
+		t.Fatalf("failures=%d error=%q requests=%v", failures, pollError, requests)
+	}
+}
+
 func TestDeliveryUsesVideoURL(t *testing.T) {
 	var received BarkMessage
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

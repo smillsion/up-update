@@ -11,7 +11,7 @@ const appIcon='/app-icon.png'
 const features=[
   {icon:ListVideo,title:'精准订阅',body:'只推送你主动选择的 UP 主新投稿，不必开启 B 站 App 消息通知。'},
   {icon:Users,title:'独立配置',body:'家人朋友使用自己的系统账号、UP 主订阅列表和 Bark Device Key。'},
-  {icon:QrCode,title:'可选扫码登录',body:'UID 可直接订阅；需要导入关注列表时，再使用哔哩哔哩客户端扫码。'},
+  {icon:QrCode,title:'可选扫码登录',body:'UID 可直接订阅；扫码可导入关注列表，并提升投稿轮询稳定性。'},
   {icon:Clock3,title:'分时轮询',body:'睡眠、工作和空闲时间使用不同检查频率，兼顾及时性与稳定性。'},
   {icon:BellRing,title:'原生推送',body:'支持官方或自建 Bark、提示音、通知级别以及延迟补发。'},
   {icon:ShieldCheck,title:'本地存储',body:'SQLite 单实例存储，敏感凭证使用 AES-256-GCM 加密。'},

@@ -33,9 +33,6 @@ func TestFollowingsCanBeListedAndImported(t *testing.T) {
 				fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"mid":123,"uname":"tester","wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
 				return
 			}
-			if r.Header.Get("Cookie") != "" {
-				t.Error("public query used an unexpected cookie")
-			}
 			fmt.Fprint(w, `{"code":-101,"message":"账号未登录","data":{"isLogin":false,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
 		case "/x/relation/followings":
 			if r.Header.Get("Cookie") != "SESSDATA=test" {
@@ -43,8 +40,8 @@ func TestFollowingsCanBeListedAndImported(t *testing.T) {
 			}
 			fmt.Fprint(w, `{"code":0,"data":{"list":[{"mid":1,"uname":"Existing","face":"https://image/1.jpg"},{"mid":2,"uname":"New UP","face":"https://image/2.jpg"},{"mid":3,"uname":"Pending UP","face":"https://image/3.jpg"}],"total":3}}`)
 		case "/x/space/wbi/arc/search":
-			if r.Header.Get("Cookie") != "" {
-				t.Error("public video query included the user's cookie")
+			if r.Header.Get("Cookie") != "SESSDATA=test" {
+				t.Error("video initialization did not use the user's cookie")
 			}
 			if r.URL.Query().Get("mid") == "3" {
 				fmt.Fprint(w, `{"code":-509,"message":"limited"}`)
@@ -169,6 +166,86 @@ func TestCreateSubscriptionWithoutBilibiliCookie(t *testing.T) {
 	}
 	if name != "Anonymous UP" || baseline != "BV1" {
 		t.Fatalf("name=%q baseline=%q", name, baseline)
+	}
+}
+
+func TestCreateSubscriptionPrefersCurrentUsersCookie(t *testing.T) {
+	const biliCookie = "SESSDATA=current-user"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != biliCookie {
+			t.Errorf("subscription cookie=%q, want current user's cookie", r.Header.Get("Cookie"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/x/web-interface/card":
+			fmt.Fprint(w, `{"code":0,"data":{"card":{"mid":"1","name":"Cookie UP","face":"https://image/avatar.jpg"}}}`)
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":0,"data":{"isLogin":true,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/space/wbi/arc/search":
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	handler := a.Routes()
+	cookie, user := loginRequest(t, handler, "admin", "admin-password")
+	configureTestBiliCookie(t, a, user.ID, biliCookie)
+	request := httptest.NewRequest(http.MethodPost, "/api/subscriptions", bytes.NewBufferString(`{"uploader":"1"}`))
+	request.AddCookie(cookie)
+	request.Header.Set("X-CSRF-Token", user.CSRFToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestCreateSubscriptionFallsBackAfterCookieAuthenticationError(t *testing.T) {
+	requests := map[string]int{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookie := r.Header.Get("Cookie")
+		requests[cookie]++
+		w.Header().Set("Content-Type", "application/json")
+		if cookie != "" {
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录"}`)
+			return
+		}
+		switch r.URL.Path {
+		case "/x/web-interface/card":
+			fmt.Fprint(w, `{"code":0,"data":{"card":{"mid":"1","name":"Fallback UP","face":"https://image/avatar.jpg"}}}`)
+		case "/x/web-interface/nav":
+			fmt.Fprint(w, `{"code":-101,"message":"账号未登录","data":{"isLogin":false,"wbi_img":{"img_url":"https://i/a1234567890123456789012345678901.png","sub_url":"https://i/b1234567890123456789012345678901.png"}}}`)
+		case "/x/space/wbi/arc/search":
+			fmt.Fprint(w, `{"code":0,"data":{"list":{"vlist":[]}}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	a := testApp(t)
+	a.bili = NewBilibiliClient(server.URL)
+	handler := a.Routes()
+	cookie, user := loginRequest(t, handler, "admin", "admin-password")
+	configureTestBiliCookie(t, a, user.ID, "SESSDATA=expired")
+	request := httptest.NewRequest(http.MethodPost, "/api/subscriptions", bytes.NewBufferString(`{"uploader":"1"}`))
+	request.AddCookie(cookie)
+	request.Header.Set("X-CSRF-Token", user.CSRFToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var status string
+	if err := a.db.QueryRow(`SELECT bili_status FROM integrations WHERE user_id=?`, user.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "invalid" || requests["SESSDATA=expired"] != 1 || requests[""] != 3 {
+		t.Fatalf("status=%q requests=%v", status, requests)
 	}
 }
 

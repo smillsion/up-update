@@ -37,7 +37,7 @@ func (a *App) pollOne(ctx context.Context) {
 	if err != nil {
 		return
 	}
-	videos, err := a.bili.GetLatestVideos(ctx, mid, "")
+	videos, err := a.getLatestVideosForPoll(ctx, mid)
 	if err != nil {
 		a.recordPollFailure(mid, err.Error(), true)
 		return
@@ -50,6 +50,61 @@ func (a *App) pollOne(ctx context.Context) {
 	interval := a.currentPollIntervalSeconds(time.Now())
 	next := time.Now().Add(time.Duration(interval)*time.Second + time.Duration(time.Now().UnixNano()%20)*time.Second).Unix()
 	_, _ = a.db.Exec(`UPDATE poll_states SET last_polled_at=?,next_poll_at=?,failure_count=0,last_error='' WHERE creator_mid=?`, now, next, mid)
+}
+
+type pollBiliCredential struct {
+	userID    int64
+	encrypted string
+}
+
+func (a *App) getLatestVideosForPoll(ctx context.Context, mid string) ([]Video, error) {
+	rows, err := a.db.QueryContext(ctx, `SELECT i.user_id,i.bili_cookie_enc
+		FROM subscriptions s
+		JOIN users u ON u.id=s.user_id
+		JOIN integrations i ON i.user_id=s.user_id
+		WHERE s.creator_mid=? AND s.enabled=1 AND u.enabled=1
+			AND i.bili_cookie_enc<>'' AND i.bili_status='valid'
+		ORDER BY COALESCE(i.bili_last_validated,0) DESC,i.user_id
+		LIMIT 3`, mid)
+	if err != nil {
+		return nil, err
+	}
+	credentials := make([]pollBiliCredential, 0, 3)
+	for rows.Next() {
+		var credential pollBiliCredential
+		if err := rows.Scan(&credential.userID, &credential.encrypted); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		credentials = append(credentials, credential)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	for _, credential := range credentials {
+		cookie, err := a.vault.Decrypt(credential.encrypted)
+		if err != nil {
+			a.logger.Error("decrypting Bilibili cookie for polling failed", "user_id", credential.userID, "error", err)
+			continue
+		}
+		videos, err := a.bili.GetLatestVideos(ctx, mid, cookie)
+		if err == nil {
+			return videos, nil
+		}
+		var providerErr *ProviderError
+		if errors.As(err, &providerErr) && providerErr.Auth {
+			a.recordBiliAuthError(credential.userID, err)
+			continue
+		}
+		return nil, err
+	}
+
+	return a.bili.GetLatestVideos(ctx, mid, "")
 }
 
 func (a *App) recordPollFailure(mid, message string, backoff bool) {

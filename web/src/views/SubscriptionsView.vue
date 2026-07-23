@@ -41,7 +41,7 @@ onBeforeUnmount(stopInitializationRefresh)
 <template>
   <section class="page">
     <header class="page-header"><div><p class="eyebrow">视频追踪</p><h1>UP 主订阅</h1><p>{{items.length}} 个订阅</p></div><div class="header-actions"><button class="icon-button" title="刷新" @click="refresh"><RefreshCw :size="19"/></button><button class="icon-button" :title="cookieReady?'从关注导入':'登录 B 站后可从关注导入'" :disabled="!cookieReady" @click="openImport"><ListPlus :size="19"/></button><button class="primary" @click="showAdd=true"><Plus :size="18"/>添加</button></div></header>
-    <p v-if="settings&&!cookieReady" class="alert info"><Info :size="17"/><span>UID 或空间链接可直接订阅；登录 B 站后还可从关注列表导入</span><RouterLink to="/settings">登录 B 站</RouterLink></p>
+    <p v-if="settings&&!cookieReady" class="alert info"><Info :size="17"/><span>UID 或空间链接可直接订阅；登录 B 站可导入关注列表并提升轮询稳定性</span><RouterLink to="/settings">登录 B 站</RouterLink></p>
     <p v-if="message" class="alert success">{{message}}</p>
     <p v-if="error&&!showAdd" class="alert error"><AlertTriangle :size="17"/>{{error}}</p>
     <div v-if="loading" class="loading-state"><span class="spinner"/>正在加载</div>

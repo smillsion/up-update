@@ -74,6 +74,18 @@ func (a *App) recordBiliAuthError(userID int64, err error) {
 	_, _ = a.db.Exec(`UPDATE integrations SET bili_status='invalid',bili_error=?,bili_last_validated=?,updated_at=? WHERE user_id=?`, cleanError(err.Error()), now, now, userID)
 }
 
+func (a *App) getCreatorAndLatestVideos(ctx context.Context, mid, cookie string) (Creator, []Video, error) {
+	creator, err := a.bili.GetCreator(ctx, mid, cookie)
+	if err != nil {
+		return Creator{}, nil, err
+	}
+	videos, err := a.bili.GetLatestVideos(ctx, mid, cookie)
+	if err != nil {
+		return Creator{}, nil, err
+	}
+	return creator, videos, nil
+}
+
 func (a *App) listSubscriptionsHandler(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	rows, err := a.db.Query(`SELECT s.id,s.enabled,c.mid,c.name,c.avatar,c.latest_bvid,c.latest_title,v.published_at,s.subscribed_at,p.last_polled_at,COALESCE(p.last_error,'') FROM subscriptions s JOIN creators c ON c.mid=s.creator_mid LEFT JOIN videos v ON v.bvid=c.latest_bvid LEFT JOIN poll_states p ON p.creator_mid=c.mid WHERE s.user_id=? ORDER BY s.subscribed_at DESC`, u.ID)
@@ -113,12 +125,19 @@ func (a *App) createSubscriptionHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	u := userFrom(r)
-	creator, err := a.bili.GetCreator(r.Context(), mid, "")
-	if err != nil {
-		writeError(w, 502, "bilibili_failed", err.Error())
+	cookie, cookieErr := a.loadBiliCookie(u.ID)
+	if errors.Is(cookieErr, errBiliCookieMissing) || errors.Is(cookieErr, errBiliCookieInvalid) {
+		cookie = ""
+	} else if cookieErr != nil {
+		writeError(w, http.StatusInternalServerError, "bilibili_cookie", "无法读取 B 站 Cookie")
 		return
 	}
-	videos, err := a.bili.GetLatestVideos(r.Context(), mid, "")
+	creator, videos, err := a.getCreatorAndLatestVideos(r.Context(), mid, cookie)
+	var providerErr *ProviderError
+	if err != nil && cookie != "" && errors.As(err, &providerErr) && providerErr.Auth {
+		a.recordBiliAuthError(u.ID, err)
+		creator, videos, err = a.getCreatorAndLatestVideos(r.Context(), mid, "")
+	}
 	if err != nil {
 		writeError(w, 502, "bilibili_failed", err.Error())
 		return
@@ -410,10 +429,11 @@ func (a *App) importFollowingsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fetchContext, cancel := context.WithTimeout(r.Context(), followingFetchTime)
-	fetched := a.bili.GetLatestVideosBatch(fetchContext, mids, "", followingFetchers)
+	fetched := a.bili.GetLatestVideosBatch(fetchContext, mids, cookie, followingFetchers)
 	cancel()
 	fetchByMID := make(map[string]VideoFetchResult, len(fetched))
 	for _, result := range fetched {
+		a.recordBiliAuthError(u.ID, result.Err)
 		fetchByMID[result.MID] = result
 	}
 	interval := a.currentPollIntervalSeconds(time.Now())
