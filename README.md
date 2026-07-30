@@ -52,7 +52,7 @@ up-update 最重要的作用，是让你自己决定哪些 UP 主更新时需要
 需要 Docker Engine 20.10+。克隆项目并准备环境变量：
 
 ```bash
-git clone https://gitee.com/birdKiss/up-update.git
+git clone https://github.com/smillsion/up-update.git
 cd up-update
 cp .env.example .env
 openssl rand -hex 32
